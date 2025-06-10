@@ -1,8 +1,8 @@
 "use client"
 
 import { useState } from "react"
-import { ChatInterface } from "@/components/chat-interface"
-import { LoginPage } from "@/components/login-page"
+import { ChatInterface } from "~/components/chat-interface"
+import { LoginPage } from "~/components/login-page"
 
 interface User {
   id: string
