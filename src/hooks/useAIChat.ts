@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { api } from "~/trpc/react";
 import type { AIProvider } from "~/server/lib/ai-model-manager";
 
@@ -27,20 +27,52 @@ export interface UseAIChatOptions {
   onError?: (error: Error) => void;
   onStreamStart?: () => void;
   onStreamEnd?: () => void;
+  conversationId?: string; // For loading existing conversations
 }
 
 export function useAIChat(options: UseAIChatOptions = {}) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [currentStreamContent, setCurrentStreamContent] = useState("");
+  const [currentConversationId, setCurrentConversationId] = useState<string | undefined>(options.conversationId);
+  const [conversationTitle, setConversationTitle] = useState<string | undefined>();
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // Get available models
   const { data: availableModels, isLoading: modelsLoading } = 
     api.aiChat.getAvailableModels.useQuery();
 
+  // Load conversation history if conversationId is provided
+  const { data: conversationData, isLoading: conversationLoading } = 
+    api.aiChat.getConversationHistory.useQuery(
+      { conversationId: options.conversationId! },
+      { enabled: !!options.conversationId }
+    );
+
+  // Load conversation data when it's available
+  useEffect(() => {
+    if (conversationData?.success && conversationData.messages) {
+      const loadedMessages: Message[] = conversationData.messages.map(msg => ({
+        id: msg.id,
+        role: msg.role as "system" | "user" | "assistant",
+        content: msg.content,
+        timestamp: new Date(msg.timestamp),
+      }));
+      setMessages(loadedMessages);
+      setConversationTitle(conversationData.conversation.title || undefined);
+      setCurrentConversationId(conversationData.conversation.id);
+    }
+  }, [conversationData]);
+
   // Generate non-streaming response
   const generateResponse = api.aiChat.generateResponse.useMutation({
+    onError: (error) => {
+      options.onError?.(new Error(error.message));
+    },
+  });
+
+  // Save conversation mutation
+  const saveConversation = api.aiChat.saveConversation.useMutation({
     onError: (error) => {
       options.onError?.(new Error(error.message));
     },
@@ -63,6 +95,32 @@ export function useAIChat(options: UseAIChatOptions = {}) {
     setMessages(prev => [...prev, newMessage]);
     return newMessage;
   }, []);
+
+  // Auto-save conversation after each message exchange
+  const autoSaveConversation = useCallback(async (
+    messagesSnapshot: Message[],
+    config: ChatConfig
+  ) => {
+    try {
+      const result = await saveConversation.mutateAsync({
+        messages: messagesSnapshot.map(msg => ({
+          role: msg.role,
+          content: msg.content,
+        })),
+        config,
+        conversationId: currentConversationId,
+        title: conversationTitle,
+      });
+
+      if (result.success && !currentConversationId) {
+        setCurrentConversationId(result.conversationId);
+        setConversationTitle(result.title || undefined);
+      }
+    } catch (error) {
+      console.error("Failed to auto-save conversation:", error);
+      // Don't throw here to avoid interrupting the chat flow
+    }
+  }, [saveConversation, currentConversationId, conversationTitle]);
 
   // Send message with non-streaming response
   const sendMessage = useCallback(async (
@@ -88,14 +146,18 @@ export function useAIChat(options: UseAIChatOptions = {}) {
       });
 
       // Add assistant response
-      addMessage("assistant", response.content);
+      const assistantMessage = addMessage("assistant", response.content);
+
+      // Auto-save conversation
+      const finalMessages = [...messages, userMessage, assistantMessage];
+      await autoSaveConversation(finalMessages, config);
 
       return response;
     } catch (error) {
       options.onError?.(error as Error);
       throw error;
     }
-  }, [messages, addMessage, generateResponse, options.onError]);
+  }, [messages, addMessage, generateResponse, autoSaveConversation, options.onError]);
 
   // Send message with simulated streaming response
   const sendMessageStream = useCallback(async (
@@ -146,7 +208,11 @@ export function useAIChat(options: UseAIChatOptions = {}) {
 
       // Finalize the assistant message
       if (!abortControllerRef.current?.signal.aborted) {
-        addMessage("assistant", fullContent);
+        const assistantMessage = addMessage("assistant", fullContent);
+        
+        // Auto-save conversation
+        const finalMessages = [...messages, userMessage, assistantMessage];
+        await autoSaveConversation(finalMessages, config);
       }
       
       setIsStreaming(false);
@@ -158,7 +224,7 @@ export function useAIChat(options: UseAIChatOptions = {}) {
       setCurrentStreamContent("");
       options.onError?.(error as Error);
     }
-  }, [messages, addMessage, generateResponse, options]);
+  }, [messages, addMessage, generateResponse, autoSaveConversation, options]);
 
   // Stop streaming
   const stopStreaming = useCallback(() => {
@@ -173,8 +239,55 @@ export function useAIChat(options: UseAIChatOptions = {}) {
   // Clear chat
   const clearChat = useCallback(() => {
     setMessages([]);
+    setCurrentConversationId(undefined);
+    setConversationTitle(undefined);
     stopStreaming();
   }, [stopStreaming]);
+
+  // Start new conversation
+  const startNewConversation = useCallback(() => {
+    clearChat();
+  }, [clearChat]);
+
+  // Load conversation
+  const loadConversation = useCallback((conversationId: string) => {
+    setCurrentConversationId(conversationId);
+    // The conversation data will be loaded automatically via the query
+  }, []);
+
+  // Manually save conversation with custom title
+  const saveConversationManually = useCallback(async (title?: string) => {
+    if (messages.length === 0) return;
+
+    // Get the last used config (you might want to store this in state)
+    const defaultConfig: ChatConfig = {
+      provider: "google",
+      model: "gemini-1.5-flash",
+      temperature: 0.7,
+      maxTokens: 1000,
+    };
+
+    try {
+      const result = await saveConversation.mutateAsync({
+        messages: messages.map(msg => ({
+          role: msg.role,
+          content: msg.content,
+        })),
+        config: defaultConfig,
+        conversationId: currentConversationId,
+        title: title || conversationTitle,
+      });
+
+      if (result.success) {
+        setCurrentConversationId(result.conversationId);
+        setConversationTitle(result.title || undefined);
+        return result.conversationId;
+      }
+    } catch (error) {
+      options.onError?.(error as Error);
+      throw error;
+    }
+  }, [messages, saveConversation, currentConversationId, conversationTitle, options.onError]);
 
   // Delete message
   const deleteMessage = useCallback((messageId: string) => {
@@ -194,8 +307,12 @@ export function useAIChat(options: UseAIChatOptions = {}) {
     isStreaming,
     currentStreamContent,
     isGenerating: generateResponse.isPending,
+    isSaving: saveConversation.isPending,
+    isLoadingConversation: conversationLoading,
     availableModels,
     modelsLoading,
+    currentConversationId,
+    conversationTitle,
 
     // Actions
     sendMessage,
@@ -203,6 +320,9 @@ export function useAIChat(options: UseAIChatOptions = {}) {
     stopStreaming,
     addMessage,
     clearChat,
+    startNewConversation,
+    loadConversation,
+    saveConversationManually,
     deleteMessage,
     editMessage,
 

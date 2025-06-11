@@ -33,6 +33,25 @@ const chatRequestSchema = z.object({
   conversationId: z.string().optional(),
 });
 
+// Helper function to generate conversation title from first message
+function generateConversationTitle(firstMessage: string): string {
+  const maxLength = 50;
+  const cleaned = firstMessage.trim().replace(/\n/g, ' ').replace(/\s+/g, ' ');
+  
+  if (cleaned.length <= maxLength) {
+    return cleaned;
+  }
+  
+  const truncated = cleaned.substring(0, maxLength);
+  const lastSpace = truncated.lastIndexOf(' ');
+  
+  if (lastSpace > maxLength * 0.7) {
+    return truncated.substring(0, lastSpace) + '...';
+  }
+  
+  return truncated + '...';
+}
+
 export const aiChatRouter = createTRPCRouter({
   // Get available providers and models
   getAvailableModels: publicProcedure.query(async () => {
@@ -117,9 +136,6 @@ export const aiChatRouter = createTRPCRouter({
           config: input.config as AIModelConfig,
         });
 
-        // TODO: Save conversation to database if conversationId is provided
-        // This would require extending your database schema to include conversations and messages
-
         return {
           content: response.content,
           usage: response.usage,
@@ -186,75 +202,314 @@ export const aiChatRouter = createTRPCRouter({
       }
     }),
 
-  // Get conversation history (placeholder - requires database schema)
-  getConversationHistory: protectedProcedure
-    .input(z.object({
-      conversationId: z.string(),
-      limit: z.number().min(1).max(100).default(50),
-      offset: z.number().min(0).default(0),
-    }))
-    .query(async ({ input, ctx }) => {
-      // TODO: Implement conversation history retrieval from database
-      // This would require extending your database schema
-      
-      return {
-        messages: [],
-        totalCount: 0,
-        success: true,
-      };
-    }),
-
-  // Save conversation (placeholder - requires database schema)
+  // Save conversation
   saveConversation: protectedProcedure
     .input(z.object({
       title: z.string().optional(),
       messages: z.array(messageSchema),
       config: aiConfigSchema,
+      conversationId: z.string().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
-      // TODO: Implement conversation saving to database
-      // This would require extending your database schema to include:
-      // - Conversations table (id, userId, title, createdAt, updatedAt)
-      // - Messages table (id, conversationId, role, content, timestamp)
-      // - ModelConfigs table (id, conversationId, provider, model, config)
-      
-      const conversationId = `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      
-      return {
-        conversationId,
-        success: true,
-        message: "Conversation saved successfully",
-      };
+      try {
+        const userId = ctx.session.user.id;
+        
+        let conversation;
+        
+        if (input.conversationId) {
+          // Update existing conversation
+          conversation = await ctx.db.conversation.update({
+            where: {
+              id: input.conversationId,
+              userId: userId, // Ensure user owns the conversation
+            },
+            data: {
+              title: input.title,
+              updatedAt: new Date(),
+            },
+          });
+          
+          // Delete existing messages
+          await ctx.db.message.deleteMany({
+            where: {
+              conversationId: conversation.id,
+            },
+          });
+          
+          // Update config
+          await ctx.db.chatConfig.upsert({
+            where: {
+              conversationId: conversation.id,
+            },
+            update: {
+              provider: input.config.provider,
+              model: input.config.model,
+              maxTokens: input.config.maxTokens,
+              temperature: input.config.temperature,
+              topP: input.config.topP,
+              topK: input.config.topK,
+              presencePenalty: input.config.presencePenalty,
+              frequencyPenalty: input.config.frequencyPenalty,
+            },
+            create: {
+              conversationId: conversation.id,
+              provider: input.config.provider,
+              model: input.config.model,
+              maxTokens: input.config.maxTokens,
+              temperature: input.config.temperature,
+              topP: input.config.topP,
+              topK: input.config.topK,
+              presencePenalty: input.config.presencePenalty,
+              frequencyPenalty: input.config.frequencyPenalty,
+            },
+          });
+        } else {
+          // Create new conversation
+          const title = input.title || 
+            (input.messages.find(m => m.role === 'user')?.content ? 
+              generateConversationTitle(input.messages.find(m => m.role === 'user')!.content) : 
+              'New Chat');
+          
+          conversation = await ctx.db.conversation.create({
+            data: {
+              title,
+              userId: userId,
+              config: {
+                create: {
+                  provider: input.config.provider,
+                  model: input.config.model,
+                  maxTokens: input.config.maxTokens,
+                  temperature: input.config.temperature,
+                  topP: input.config.topP,
+                  topK: input.config.topK,
+                  presencePenalty: input.config.presencePenalty,
+                  frequencyPenalty: input.config.frequencyPenalty,
+                },
+              },
+            },
+          });
+        }
+        
+        // Add messages
+        await ctx.db.message.createMany({
+          data: input.messages.map(msg => ({
+            conversationId: conversation.id,
+            role: msg.role,
+            content: msg.content,
+            timestamp: new Date(),
+          })),
+        });
+        
+        return {
+          conversationId: conversation.id,
+          title: conversation.title,
+          success: true,
+          message: "Conversation saved successfully",
+        };
+      } catch (error) {
+        console.error("Error saving conversation:", error);
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: error instanceof Error ? error.message : "Failed to save conversation",
+        });
+      }
     }),
 
-  // List user conversations (placeholder - requires database schema)
+  // Get conversation history
+  getConversationHistory: protectedProcedure
+    .input(z.object({
+      conversationId: z.string(),
+    }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const userId = ctx.session.user.id;
+        
+        const conversation = await ctx.db.conversation.findFirst({
+          where: {
+            id: input.conversationId,
+            userId: userId,
+          },
+          include: {
+            messages: {
+              orderBy: {
+                timestamp: 'asc',
+              },
+            },
+            config: true,
+          },
+        });
+        
+        if (!conversation) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Conversation not found",
+          });
+        }
+        
+        return {
+          conversation: {
+            id: conversation.id,
+            title: conversation.title,
+            createdAt: conversation.createdAt,
+            updatedAt: conversation.updatedAt,
+          },
+          messages: conversation.messages,
+          config: conversation.config,
+          success: true,
+        };
+      } catch (error) {
+        console.error("Error fetching conversation history:", error);
+        
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to fetch conversation history",
+        });
+      }
+    }),
+
+  // List user conversations
   listConversations: protectedProcedure
     .input(z.object({
       limit: z.number().min(1).max(100).default(20),
       offset: z.number().min(0).default(0),
     }))
     .query(async ({ input, ctx }) => {
-      // TODO: Implement conversation listing from database
-      
-      return {
-        conversations: [],
-        totalCount: 0,
-        success: true,
-      };
+      try {
+        const userId = ctx.session.user.id;
+        
+        const [conversations, totalCount] = await Promise.all([
+          ctx.db.conversation.findMany({
+            where: {
+              userId: userId,
+            },
+            select: {
+              id: true,
+              title: true,
+              createdAt: true,
+              updatedAt: true,
+              _count: {
+                select: {
+                  messages: true,
+                },
+              },
+            },
+            orderBy: {
+              updatedAt: 'desc',
+            },
+            take: input.limit,
+            skip: input.offset,
+          }),
+          ctx.db.conversation.count({
+            where: {
+              userId: userId,
+            },
+          }),
+        ]);
+        
+        return {
+          conversations,
+          totalCount,
+          success: true,
+        };
+      } catch (error) {
+        console.error("Error listing conversations:", error);
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to list conversations",
+        });
+      }
     }),
 
-  // Delete conversation (placeholder - requires database schema)
+  // Delete conversation
   deleteConversation: protectedProcedure
     .input(z.object({
       conversationId: z.string(),
     }))
     .mutation(async ({ input, ctx }) => {
-      // TODO: Implement conversation deletion from database
-      
-      return {
-        success: true,
-        message: "Conversation deleted successfully",
-      };
+      try {
+        const userId = ctx.session.user.id;
+        
+        // Verify the conversation belongs to the user and delete it
+        const deletedConversation = await ctx.db.conversation.deleteMany({
+          where: {
+            id: input.conversationId,
+            userId: userId,
+          },
+        });
+        
+        if (deletedConversation.count === 0) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Conversation not found or you don't have permission to delete it",
+          });
+        }
+        
+        return {
+          success: true,
+          message: "Conversation deleted successfully",
+        };
+      } catch (error) {
+        console.error("Error deleting conversation:", error);
+        
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to delete conversation",
+        });
+      }
+    }),
+
+  // Update conversation title
+  updateConversationTitle: protectedProcedure
+    .input(z.object({
+      conversationId: z.string(),
+      title: z.string().min(1).max(100),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const userId = ctx.session.user.id;
+        
+        const updatedConversation = await ctx.db.conversation.updateMany({
+          where: {
+            id: input.conversationId,
+            userId: userId,
+          },
+          data: {
+            title: input.title,
+            updatedAt: new Date(),
+          },
+        });
+        
+        if (updatedConversation.count === 0) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Conversation not found or you don't have permission to update it",
+          });
+        }
+        
+        return {
+          success: true,
+          message: "Conversation title updated successfully",
+        };
+      } catch (error) {
+        console.error("Error updating conversation title:", error);
+        
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to update conversation title",
+        });
+      }
     }),
 });
 

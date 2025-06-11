@@ -64,7 +64,8 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [message, setMessage] = useState("")
-  const [selectedModel, setSelectedModel] = useState("gemini-2.5-flash")
+  const [selectedModel, setSelectedModel] = useState("gemini-1.5-flash")
+  const [currentConversationId, setCurrentConversationId] = useState<string | undefined>()
   const inputRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -78,12 +79,24 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
     modelsLoading,
     sendMessageStream,
     clearChat,
+    startNewConversation,
+    loadConversation,
+    conversationTitle,
+    currentConversationId: hookConversationId,
   } = useAIChat({
+    conversationId: currentConversationId,
     onError: (error) => {
       console.error("AI Chat Error:", error)
       // You could add a toast notification here
     },
   })
+
+  // Sync conversation ID between state and hook
+  useEffect(() => {
+    if (hookConversationId !== currentConversationId) {
+      setCurrentConversationId(hookConversationId)
+    }
+  }, [hookConversationId])
 
   // Transform availableModels data structure for the dropdown
   const transformedAvailableModels = availableModels ? 
@@ -106,7 +119,7 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
     }
   }, [transformedAvailableModels, selectedModel])
 
- // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages, currentStreamContent])
@@ -161,11 +174,25 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
 
   // Helper function to determine provider from model name
   const getProviderFromModel = (modelId: string) => {
-    if (modelId.startsWith("gemini")) return "google" as const
-    if (modelId.startsWith("gpt") || modelId.startsWith("o4")) return "openai" as const
-    if (modelId.startsWith("claude")) return "anthropic" as const
-    if (modelId.startsWith("deepseek")) return "openai" as const // assuming OpenAI compatible
+    if (modelId.includes("gemini")) return "google" as const
+    if (modelId.includes("gpt") || modelId.includes("o4")) return "openai" as const
+    if (modelId.includes("claude")) return "anthropic" as const
+    if (modelId.includes("deepseek")) return "openai" as const // assuming OpenAI compatible
     return "google" as const // default
+  }
+
+  // Handle conversation selection from sidebar
+  const handleConversationSelect = (conversationId: string) => {
+    setCurrentConversationId(conversationId)
+    loadConversation(conversationId)
+    setSidebarOpen(false) // Close sidebar on mobile
+  }
+
+  // Handle new chat
+  const handleNewChat = () => {
+    setCurrentConversationId(undefined)
+    startNewConversation()
+    setSidebarOpen(false) // Close sidebar on mobile
   }
 
   const hasMessages = messages.length > 0 || isStreaming
@@ -179,6 +206,9 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
         user={user}
         onLogout={onLogout}
+        currentConversationId={currentConversationId}
+        onConversationSelect={handleConversationSelect}
+        onNewChat={handleNewChat}
       />
 
       {/* Main Content */}
@@ -193,13 +223,15 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
           >
             <Menu className="h-5 w-5" />
           </Button>
-          <h1 className="font-bold tracking-tight text-lg">T3.chat</h1>
+          <h1 className="font-bold tracking-tight text-lg">
+            {conversationTitle || "T3.chat"}
+          </h1>
           <div className="flex items-center gap-2">
             {hasMessages && (
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={clearChat}
+                onClick={handleNewChat}
                 className="text-xs"
               >
                 Clear
@@ -210,16 +242,21 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
         </div>
 
         {/* Desktop Header */}
-        <div className="hidden lg:flex items-center justify-end p-6 bg-background/50 backdrop-blur-xl">
+        <div className="hidden lg:flex items-center justify-between p-6 bg-background/50 backdrop-blur-xl">
+          <div className="flex-1">
+            {conversationTitle && (
+              <h1 className="text-lg font-bold text-foreground">{conversationTitle}</h1>
+            )}
+          </div>
           <div className="flex items-center gap-4">
             {hasMessages && (
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={clearChat}
+                onClick={handleNewChat}
                 className="text-sm"
               >
-                Clear Chat
+                New Chat
               </Button>
             )}
             <Button

@@ -14,17 +14,7 @@ datasource db {
     url      = env("DATABASE_URL")
 }
 
-model Post {
-    id        Int      @id @default(autoincrement())
-    name      String
-    createdAt DateTime @default(now())
-    updatedAt DateTime @updatedAt
 
-    createdBy   User   @relation(fields: [createdById], references: [id])
-    createdById String
-
-    @@index([name])
-}
 
 // Necessary for Next auth
 model Account {
@@ -55,14 +45,14 @@ model Session {
 }
 
 model User {
-    id            String    @id @default(cuid())
+    id            String         @id @default(cuid())
     name          String?
-    email         String?   @unique
+    email         String?        @unique
     emailVerified DateTime?
     image         String?
     accounts      Account[]
     sessions      Session[]
-    posts         Post[]
+    conversations Conversation[]
 }
 
 model VerificationToken {
@@ -71,4 +61,43 @@ model VerificationToken {
     expires    DateTime
 
     @@unique([identifier, token])
+}
+
+// Chat persistence models
+model Conversation {
+    id        String      @id @default(cuid())
+    title     String?
+    createdAt DateTime    @default(now())
+    updatedAt DateTime    @updatedAt
+    userId    String
+    user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+    messages  Message[]
+    config    ChatConfig?
+
+    @@index([userId, createdAt])
+}
+
+model Message {
+    id             String       @id @default(cuid())
+    conversationId String
+    conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+    role           String       // "system" | "user" | "assistant"
+    content        String       @db.Text
+    timestamp      DateTime     @default(now())
+
+    @@index([conversationId, timestamp])
+}
+
+model ChatConfig {
+    id               String       @id @default(cuid())
+    conversationId   String       @unique
+    conversation     Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+    provider         String
+    model            String
+    maxTokens        Int?
+    temperature      Float?
+    topP             Float?
+    topK             Int?
+    presencePenalty  Float?
+    frequencyPenalty Float?
 }
