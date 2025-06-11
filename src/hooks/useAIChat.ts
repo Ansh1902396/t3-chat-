@@ -132,9 +132,26 @@ export function useAIChat(options: UseAIChatOptions = {}) {
       // Add user message
       const userMessage = addMessage("user", content);
 
-      // Prepare messages array
+      // Prepare messages array with formatting system prompt
+      const defaultSystemPrompt = `You are a helpful AI assistant. When providing code examples, always format them properly using markdown code blocks with language specification.
+
+For example:
+- Use \`\`\`typescript for TypeScript code
+- Use \`\`\`javascript for JavaScript code  
+- Use \`\`\`python for Python code
+- Use \`\`\`json for JSON data
+- Use \`\`\`css for CSS styles
+- Use \`\`\`html for HTML markup
+- Use \`\`\`bash for shell commands
+
+Always include the language identifier after the opening triple backticks for proper syntax highlighting.
+
+For inline code, use single backticks: \`variableName\` or \`functionName()\`.
+
+Format your responses with proper markdown structure including headers, lists, and code blocks as appropriate.`;
+
       const messagesForAPI = [
-        ...(systemMessage ? [{ role: "system" as const, content: systemMessage }] : []),
+        { role: "system" as const, content: systemMessage || defaultSystemPrompt },
         ...messages.map(msg => ({ role: msg.role, content: msg.content })),
         { role: "user" as const, content }
       ];
@@ -169,9 +186,26 @@ export function useAIChat(options: UseAIChatOptions = {}) {
       // Add user message
       const userMessage = addMessage("user", content);
 
-      // Prepare messages array
+      // Prepare messages array with formatting system prompt
+      const defaultSystemPrompt = `You are a helpful AI assistant. When providing code examples, always format them properly using markdown code blocks with language specification.
+
+For example:
+- Use \`\`\`typescript for TypeScript code
+- Use \`\`\`javascript for JavaScript code  
+- Use \`\`\`python for Python code
+- Use \`\`\`json for JSON data
+- Use \`\`\`css for CSS styles
+- Use \`\`\`html for HTML markup
+- Use \`\`\`bash for shell commands
+
+Always include the language identifier after the opening triple backticks for proper syntax highlighting.
+
+For inline code, use single backticks: \`variableName\` or \`functionName()\`.
+
+Format your responses with proper markdown structure including headers, lists, and code blocks as appropriate.`;
+
       const messagesForAPI = [
-        ...(systemMessage ? [{ role: "system" as const, content: systemMessage }] : []),
+        { role: "system" as const, content: systemMessage || defaultSystemPrompt },
         ...messages.map(msg => ({ role: msg.role, content: msg.content })),
         { role: "user" as const, content }
       ];
@@ -191,19 +225,27 @@ export function useAIChat(options: UseAIChatOptions = {}) {
 
       // Simulate streaming by gradually revealing the content
       const fullContent = response.content;
-      const words = fullContent.split(' ');
       let currentContent = '';
       
-      for (let i = 0; i < words.length; i++) {
+      // Stream character by character for more realistic effect
+      for (let i = 0; i < fullContent.length; i++) {
         if (abortControllerRef.current?.signal.aborted) {
           break;
         }
         
-        currentContent += (i > 0 ? ' ' : '') + words[i];
+        currentContent += fullContent[i];
         setCurrentStreamContent(currentContent);
         
-        // Small delay to simulate streaming
-        await new Promise(resolve => setTimeout(resolve, 50));
+        // Variable delay based on character type
+        const char = fullContent[i] || '';
+        let delay = 20; // base delay
+        
+        if (char === '\n') delay = 100; // pause at line breaks
+        else if (char === ' ') delay = 30; // slightly longer for spaces
+        else if (/[.!?]/.test(char)) delay = 200; // pause at sentence endings
+        else if (/[,;:]/.test(char)) delay = 80; // pause at punctuation
+        
+        await new Promise(resolve => setTimeout(resolve, delay));
       }
 
       // Finalize the assistant message

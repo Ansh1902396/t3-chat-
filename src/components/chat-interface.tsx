@@ -9,6 +9,8 @@ import { Sidebar } from "./sidebar"
 import { ModelDropdown } from "./model-dropdown"
 import { ThemeToggle } from "./theme-toggle"
 import { Menu, Sparkles, Search, Code, GraduationCap, Paperclip, ArrowUp, User, Bot } from "lucide-react"
+import { MarkdownRenderer } from "./ui/markdown-renderer"
+import { StreamingMarkdown } from "./ui/streaming-markdown"
 import { useAIChat, type ChatConfig } from "~/hooks/useAIChat"
 import { cn } from "~/lib/utils"
 
@@ -198,7 +200,7 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
   const hasMessages = messages.length > 0 || isStreaming
 
   return (
-    <div className="flex h-screen bg-background">
+    <div className="flex h-screen bg-background overflow-hidden">
       <Sidebar
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen(!sidebarOpen)}
@@ -212,7 +214,7 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
       />
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col min-w-0">
         {/* Mobile Header */}
         <div className="flex items-center justify-between p-4 border-b border-border/50 lg:hidden bg-background/80 backdrop-blur-xl">
           <Button
@@ -271,10 +273,10 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
         </div>
 
         {/* Chat Area */}
-        <div className="flex-1 flex flex-col">
+        <div className="flex-scroll-container">
           {!hasMessages ? (
             // Welcome Screen
-            <div className="flex-1 flex flex-col items-center justify-center p-8 max-w-6xl mx-auto w-full">
+            <div className="flex-1 flex flex-col items-center justify-center p-8 max-w-6xl mx-auto w-full overflow-y-auto">
               <div className="text-center mb-12 w-full animate-fade-in">
                 <h1 className="text-6xl font-black mb-4 text-balance tracking-tight bg-gradient-to-br from-foreground via-foreground to-muted-foreground bg-clip-text text-transparent">
                   How can I help you{user ? `, ${user.name.split(" ")[0]}` : ""}?
@@ -321,13 +323,13 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
             </div>
           ) : (
             // Messages Area
-            <div className="flex-1 overflow-y-auto p-4 space-y-6">
+            <div className="messages-scroll-area p-4 space-y-6">
               <div className="max-w-4xl mx-auto w-full space-y-6">
                 {messages.map((msg) => (
                   <div
                     key={msg.id}
                     className={cn(
-                      "flex gap-4 group",
+                      "flex gap-4 group message-container",
                       msg.role === "user" ? "justify-end" : "justify-start"
                     )}
                   >
@@ -338,16 +340,27 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                     )}
                     <div
                       className={cn(
-                        "max-w-[80%] rounded-2xl px-4 py-3 text-sm",
+                        "max-w-[80%] rounded-2xl text-sm",
                         msg.role === "user"
-                          ? "bg-primary text-primary-foreground ml-auto"
-                          : "bg-muted/50"
+                          ? "bg-primary text-primary-foreground ml-auto px-4 py-3"
+                          : "bg-muted/50 overflow-hidden"
                       )}
                     >
-                      <div className="whitespace-pre-wrap">{msg.content}</div>
-                      <div className="text-xs opacity-60 mt-2">
-                        {msg.timestamp.toLocaleTimeString()}
-                      </div>
+                      {msg.role === "assistant" ? (
+                        <div className="p-4">
+                          <MarkdownRenderer>{msg.content}</MarkdownRenderer>
+                          <div className="text-xs opacity-60 mt-3 pt-2 border-t border-border/20">
+                            {msg.timestamp.toLocaleTimeString()}
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="whitespace-pre-wrap">{msg.content}</div>
+                          <div className="text-xs opacity-60 mt-2">
+                            {msg.timestamp.toLocaleTimeString()}
+                          </div>
+                        </>
+                      )}
                     </div>
                     {msg.role === "user" && (
                       <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-muted/40 to-muted/60 flex items-center justify-center">
@@ -363,16 +376,18 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                     <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center">
                       <Bot className="h-4 w-4 text-primary animate-pulse" />
                     </div>
-                    <div className="max-w-[80%] rounded-2xl px-4 py-3 text-sm bg-muted/50">
-                      <div className="whitespace-pre-wrap">{currentStreamContent}</div>
-                      {currentStreamContent && (
-                        <div className="inline-block w-2 h-4 bg-primary/60 animate-pulse ml-1" />
-                      )}
+                    <div className="max-w-[80%] rounded-2xl text-sm bg-muted/50 overflow-hidden">
+                      <div className="p-4">
+                        <StreamingMarkdown 
+                          content={currentStreamContent} 
+                          isStreaming={true}
+                        />
+                      </div>
                     </div>
                   </div>
                 )}
+                <div ref={messagesEndRef} />
               </div>
-              <div ref={messagesEndRef} />
             </div>
           )}
         </div>

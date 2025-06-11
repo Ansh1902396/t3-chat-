@@ -130,9 +130,35 @@ export const aiChatRouter = createTRPCRouter({
           });
         }
 
+        // Add system prompt for proper formatting
+        const systemPrompt = {
+          role: "system" as const,
+          content: `You are a helpful AI assistant. When providing code examples, always format them properly using markdown code blocks with language specification. 
+
+For example:
+- Use \`\`\`typescript for TypeScript code
+- Use \`\`\`javascript for JavaScript code  
+- Use \`\`\`python for Python code
+- Use \`\`\`json for JSON data
+- Use \`\`\`css for CSS styles
+- Use \`\`\`html for HTML markup
+- Use \`\`\`bash for shell commands
+
+Always include the language identifier after the opening triple backticks for proper syntax highlighting.
+
+For inline code, use single backticks: \`variableName\` or \`functionName()\`.
+
+Format your responses with proper markdown structure including headers, lists, and code blocks as appropriate.`
+        };
+
+        // Prepend system prompt if not already present
+        const messages = input.messages.find(m => m.role === "system") 
+          ? input.messages 
+          : [systemPrompt, ...input.messages];
+
         // Generate response
         const response = await aiModelManager.generateResponse({
-          messages: input.messages as CoreMessage[],
+          messages: messages as CoreMessage[],
           config: input.config as AIModelConfig,
         });
 

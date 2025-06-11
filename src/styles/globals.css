@@ -1,8 +1,10 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "@fontsource/jetbrains-mono";
 
 @theme {
   --font-family-sans: Inter, ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --font-family-mono: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
   
   /* Light theme - matching the pinkish/lavender background */
   --color-background: 320 20% 97%;
@@ -69,6 +71,12 @@ body {
   font-optical-sizing: auto;
 }
 
+/* Code and monospace elements */
+code, pre, kbd, samp {
+  font-family: var(--font-family-mono);
+  font-feature-settings: "liga" 0, "calt" 1;
+}
+
 /* Custom scrollbar */
 .custom-scrollbar::-webkit-scrollbar {
   width: 4px;
@@ -85,6 +93,67 @@ body {
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--color-muted-foreground) / 0.3);
+}
+
+/* Layout stability improvements */
+.will-change-transform {
+  will-change: transform;
+}
+
+.will-change-scroll {
+  will-change: scroll-position;
+}
+
+/* Prevent layout shift during content changes */
+.layout-stable {
+  contain: style;
+}
+
+/* Ensure proper scrolling behavior */
+.scroll-container {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-behavior: smooth;
+}
+
+/* Fix flex height calculations for proper scrolling */
+.flex-scroll-container {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Ensure messages container takes available height */
+.messages-scroll-area {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* Code block collapse animation */
+.code-block-collapse {
+  transition: max-height 0.3s ease-out, opacity 0.2s ease-out;
+  overflow: hidden;
+}
+
+.code-block-collapse.collapsed {
+  max-height: 0;
+  opacity: 0;
+}
+
+/* Improved message container stability */
+.message-container {
+  contain: style;
+  will-change: auto;
+}
+
+/* Sidebar stability */
+.sidebar-container {
+  contain: style;
+  will-change: transform;
+  transition: transform 0.3s ease-out, width 0.3s ease-out;
 }
 
 /* Animations */
@@ -179,4 +248,58 @@ body {
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+}
+
+/* Code block styles */
+.code-block {
+  position: relative;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  background: hsl(var(--color-muted) / 0.3);
+  border: 1px solid hsl(var(--color-border) / 0.5);
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  background: hsl(var(--color-muted) / 0.5);
+  border-bottom: 1px solid hsl(var(--color-border) / 0.5);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.code-block-content {
+  overflow-x: auto;
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+/* Prose styles for markdown content */
+.prose {
+  color: hsl(var(--color-foreground));
+  max-width: none;
+}
+
+.prose :where(code):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  color: hsl(var(--color-foreground));
+  font-weight: 400;
+  font-size: 0.875em;
+}
+
+.prose :where(pre):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  color: hsl(var(--color-foreground));
+  background-color: hsl(var(--color-muted) / 0.3);
+  overflow-x: auto;
+  font-weight: 400;
+  font-size: 0.875em;
+  line-height: 1.7142857;
+  margin-top: 1.7142857em;
+  margin-bottom: 1.7142857em;
+  border-radius: 0.375rem;
+  padding-top: 0.8571429em;
+  padding-right: 1.1428571em;
+  padding-bottom: 0.8571429em;
+  padding-left: 1.1428571em;
 }

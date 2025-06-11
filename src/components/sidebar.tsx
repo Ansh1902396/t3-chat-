@@ -42,10 +42,14 @@ export function Sidebar({
 }: SidebarProps) {
   const [searchValue, setSearchValue] = useState("")
 
-  // Fetch conversations
+  // Fetch conversations with refetch optimization
   const { data: conversationsData, refetch: refetchConversations } = api.aiChat.listConversations.useQuery(
     { limit: 50, offset: 0 },
-    { enabled: !!user }
+    { 
+      enabled: !!user,
+      refetchOnWindowFocus: false,
+      staleTime: 30000, // 30 seconds
+    }
   )
 
   // Delete conversation mutation
@@ -103,12 +107,16 @@ export function Sidebar({
       <div
         className={`
         fixed left-0 top-0 h-full bg-background/95 backdrop-blur-xl border-r border-border/50 z-50 
-        transform transition-all duration-300 ease-out
+        transform transition-all duration-300 ease-out will-change-transform sidebar-container
         ${isOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full"}
         lg:translate-x-0 lg:static lg:z-auto lg:shadow-none lg:bg-background lg:backdrop-blur-none
         ${isCollapsed ? "lg:w-20" : "lg:w-72"}
       `}
-        style={{ width: isOpen ? "288px" : isCollapsed ? "80px" : "288px" }}
+        style={{ 
+          width: isOpen ? "288px" : isCollapsed ? "80px" : "288px",
+          minWidth: isCollapsed ? "80px" : "288px",
+          maxWidth: isCollapsed ? "80px" : "288px"
+        }}
       >
         <div className="flex flex-col h-full p-4">
           {/* Header */}
@@ -186,7 +194,7 @@ export function Sidebar({
           {/* Chat History */}
           <div className="flex-1 mb-6 overflow-hidden">
             {user ? (
-              <div className="space-y-2 h-full overflow-y-auto custom-scrollbar">
+              <div className="space-y-2 h-full overflow-y-auto custom-scrollbar scroll-container">
                 {!isCollapsed && filteredConversations.length > 0 && (
                   <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide px-2 mb-3">
                     Recent Chats
