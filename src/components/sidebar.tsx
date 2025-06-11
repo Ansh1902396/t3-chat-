@@ -110,19 +110,19 @@ export function Sidebar({
         transform transition-all duration-300 ease-out will-change-transform sidebar-container
         ${isOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full"}
         lg:translate-x-0 lg:static lg:z-auto lg:shadow-none lg:bg-background lg:backdrop-blur-none
-        ${isCollapsed ? "lg:w-20" : "lg:w-72"}
+        ${isCollapsed ? "lg:w-16" : "lg:w-72"}
       `}
         style={{ 
-          width: isOpen ? "288px" : isCollapsed ? "80px" : "288px",
-          minWidth: isCollapsed ? "80px" : "288px",
-          maxWidth: isCollapsed ? "80px" : "288px"
+          width: isOpen ? "288px" : isCollapsed ? "64px" : "288px",
+          minWidth: isCollapsed ? "64px" : "288px",
+          maxWidth: isCollapsed ? "64px" : "288px"
         }}
       >
-        <div className="flex flex-col h-full p-4">
+                  <div className={`flex flex-col h-full ${isCollapsed ? "p-2" : "p-4"}`}>
           {/* Header */}
-          <div className={`flex items-center mb-6 ${isCollapsed ? "justify-center" : "justify-between"}`}>
+          <div className={`flex items-center mb-6 ${isCollapsed ? "justify-center flex-col gap-3" : "justify-between"}`}>
             {!isCollapsed && (
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-1">
                 <Button
                   variant="ghost"
                   size="icon"
@@ -131,30 +131,44 @@ export function Sidebar({
                 >
                   <Menu className="h-4 w-4" />
                 </Button>
-                <h1 className="text-xl font-black tracking-tight gradient-text-t3">T3.chat</h1>
+                <div className="flex-1 text-center lg:text-left">
+                  <h1 className="text-xl font-black tracking-tight gradient-text-t3">T3.chat</h1>
+                </div>
               </div>
             )}
 
-            {isCollapsed && <h1 className="text-lg font-black tracking-tight gradient-text-t3">T3</h1>}
+            {isCollapsed && (
+              <div className="flex flex-col items-center gap-2">
+                <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center shadow-lg">
+                  <h1 className="text-sm font-black tracking-tight text-primary">T3</h1>
+                </div>
+              </div>
+            )}
 
             {/* Collapse Toggle - Desktop Only */}
             <Button
               variant="ghost"
               size="icon"
-              className="hidden lg:flex hover:bg-gradient-to-r hover:from-muted/50 hover:to-muted/30 transition-all rounded-full"
+              className={`hidden lg:flex hover:bg-gradient-to-r hover:from-muted/50 hover:to-muted/30 transition-all rounded-full ${
+                isCollapsed ? "mt-2" : ""
+              }`}
               onClick={onToggleCollapse}
             >
-              {isCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+              {isCollapsed ? <PanelLeftOpen className="h-3 w-3" /> : <PanelLeftClose className="h-4 w-4" />}
             </Button>
           </div>
 
           {/* New Chat Button */}
-          <div className="mb-6">
+          <div className={`mb-6 ${isCollapsed ? "flex justify-center" : ""}`}>
             <Button
               onClick={onNewChat}
               className={`bg-gradient-to-r from-primary via-primary to-primary/80 hover:from-primary/90 hover:via-primary/90 hover:to-primary/70
-                       text-white font-semibold rounded-full py-3 group transition-all duration-200 shadow-lg hover:shadow-xl
-                       hover:scale-[1.02] active:scale-[0.98] ${isCollapsed ? "w-12 h-12 p-0" : "w-full"}`}
+                       text-white font-semibold rounded-full group transition-all duration-200 shadow-lg hover:shadow-xl
+                       hover:scale-[1.02] active:scale-[0.98] ${
+                         isCollapsed 
+                           ? "w-12 h-12 p-0 justify-center" 
+                           : "w-full py-3"
+                       }`}
               title={isCollapsed ? "New Chat" : undefined}
             >
               <Plus className={`h-4 w-4 transition-transform group-hover:rotate-90 ${isCollapsed ? "" : "mr-2"}`} />
@@ -183,10 +197,10 @@ export function Sidebar({
               <Button
                 variant="ghost"
                 size="icon"
-                className="w-12 h-12 hover:bg-gradient-to-r hover:from-muted/50 hover:to-muted/30 transition-all rounded-full"
+                className="w-10 h-10 hover:bg-gradient-to-r hover:from-muted/50 hover:to-muted/30 transition-all rounded-2xl shadow-sm hover:shadow-md"
                 title="Search"
               >
-                <Search className="h-4 w-4" />
+                <Search className="h-3.5 w-3.5 text-muted-foreground" />
               </Button>
             </div>
           )}
@@ -208,18 +222,18 @@ export function Sidebar({
                       className={cn(
                         "group cursor-pointer transition-all duration-200 animate-slide-in",
                         isCollapsed
-                          ? "w-12 h-12 rounded-full bg-gradient-to-br from-muted/20 to-muted/10 mx-auto flex items-center justify-center hover:from-muted/30 hover:to-muted/20"
+                          ? "w-10 h-10 rounded-2xl bg-gradient-to-br from-muted/20 to-muted/10 mx-auto flex items-center justify-center hover:from-muted/30 hover:to-muted/20 shadow-sm hover:shadow-md"
                           : "p-3 rounded-2xl hover:bg-muted/30",
                         currentConversationId === conversation.id && 
                           (isCollapsed 
-                            ? "bg-gradient-to-br from-primary/20 to-primary/10 border-2 border-primary/30"
+                            ? "bg-gradient-to-br from-primary/30 to-primary/20 border border-primary/40 shadow-md"
                             : "bg-gradient-to-r from-primary/10 via-primary/5 to-transparent border border-primary/20")
                       )}
                       onClick={() => onConversationSelect?.(conversation.id)}
                       style={{ animationDelay: `${index * 0.1}s` }}
                     >
                       {isCollapsed ? (
-                        <MessageSquare className="h-4 w-4 text-muted-foreground group-hover:text-foreground" />
+                        <MessageSquare className="h-3.5 w-3.5 text-muted-foreground group-hover:text-foreground transition-colors" />
                       ) : (
                         <div className="flex items-center justify-between w-full">
                           <div className="flex items-center gap-3 flex-1 min-w-0">
