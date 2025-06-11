@@ -75,6 +75,7 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
     currentStreamContent,
     isGenerating,
     availableModels,
+    modelsLoading,
     sendMessageStream,
     clearChat,
   } = useAIChat({
@@ -95,7 +96,17 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
       }))
     ) : undefined
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-select first available model if current selection is not available
+  useEffect(() => {
+    if (transformedAvailableModels && transformedAvailableModels.length > 0) {
+      const currentModelExists = transformedAvailableModels.some(model => model.id === selectedModel)
+      if (!currentModelExists) {
+        setSelectedModel(transformedAvailableModels[0]!.id)
+      }
+    }
+  }, [transformedAvailableModels, selectedModel])
+
+ // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages, currentStreamContent])
@@ -360,6 +371,7 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                   selectedModel={selectedModel} 
                   onModelChange={setSelectedModel} 
                   availableModels={transformedAvailableModels}
+                  isLoading={modelsLoading}
                 />
 
                 <div className="h-8 w-px bg-border/50" />

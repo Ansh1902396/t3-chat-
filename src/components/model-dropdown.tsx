@@ -2,92 +2,36 @@
 import { Button } from "~/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu"
 import { Badge } from "~/components/ui/badge"
-import { ChevronDown, Eye, FileText, Info, Crown, Sparkles } from "lucide-react"
+import { ChevronDown, Eye, FileText, Info, Crown, Sparkles, Loader2 } from "lucide-react"
 import { useState } from "react"
 
-// Static model data for UI - this could be moved to a config file
-const staticModels = [
-  {
-    id: "gemini-2.5-flash",
-    name: "Gemini 2.5 Flash",
-    icon: "⚡",
-    features: ["eye", "link", "file"],
-    available: true,
-    premium: false,
-    description: "Fast and efficient responses",
-    provider: "google" as const,
-  },
-  {
-    id: "gemini-2.5-pro",
-    name: "Gemini 2.5 Pro",
-    icon: "⚡",
-    features: ["eye", "link", "file", "info"],
-    available: false,
-    premium: true,
-    description: "Advanced reasoning capabilities",
-    provider: "google" as const,
-  },
-  {
-    id: "gpt-4",
-    name: "GPT-4",
-    icon: "🤖",
-    features: ["eye", "link", "file", "info"],
-    available: true,
-    premium: false,
-    description: "Most capable GPT model",
-    provider: "openai" as const,
-  },
-  {
-    id: "gpt-imagegen",
-    name: "GPT ImageGen",
-    icon: "🎨",
-    features: ["eye"],
-    available: true,
-    premium: false,
-    description: "AI-powered image generation",
-    provider: "openai" as const,
-  },
-  {
-    id: "o4-mini",
-    name: "GPT-4o Mini",
-    icon: "🔷",
-    features: ["eye", "info"],
-    available: true,
-    premium: false,
-    description: "Compact and efficient model",
-    provider: "openai" as const,
-  },
-  {
-    id: "claude-4-sonnet",
-    name: "Claude 4 Sonnet",
-    icon: "🤖",
-    features: ["eye", "file"],
-    available: true,
-    premium: false,
-    description: "Balanced performance and accuracy",
-    provider: "anthropic" as const,
-  },
-  {
-    id: "claude-4-sonnet-reasoning",
-    name: "Claude 4 Sonnet (Reasoning)",
-    icon: "🤖",
-    features: ["eye", "file", "info"],
-    available: false,
-    premium: true,
-    description: "Enhanced logical reasoning",
-    provider: "anthropic" as const,
-  },
-  {
-    id: "deepseek-r1",
-    name: "DeepSeek R1 (Llama Distilled)",
-    icon: "🔍",
-    features: ["info"],
-    available: false,
-    premium: true,
-    description: "Research-focused model",
-    provider: "openai" as const,
-  },
-]
+// Helper function to get model display info
+const getModelDisplayInfo = (modelId: string, modelName: string) => {
+  // Determine icon based on model name/id
+  let icon = "🤖"; // default
+  if (modelId.includes("gemini") || modelName.toLowerCase().includes("gemini")) {
+    icon = "⚡";
+  } else if (modelId.includes("gpt") || modelName.toLowerCase().includes("gpt")) {
+    icon = "🤖";
+  } else if (modelId.includes("claude") || modelName.toLowerCase().includes("claude")) {
+    icon = "🤖";
+  } else if (modelId.includes("deepseek") || modelName.toLowerCase().includes("deepseek")) {
+    icon = "🔍";
+  } else if (modelName.toLowerCase().includes("image")) {
+    icon = "🎨";
+  }
+
+  // Determine features based on model capabilities (simplified for now)
+  const features = ["eye", "file"]; // Basic features for all models
+  if (modelName.toLowerCase().includes("pro") || modelName.toLowerCase().includes("reasoning")) {
+    features.push("info");
+  }
+  if (!modelName.toLowerCase().includes("image")) {
+    features.push("link");
+  }
+
+  return { icon, features };
+};
 
 interface ModelDropdownProps {
   selectedModel: string
@@ -98,26 +42,57 @@ interface ModelDropdownProps {
     provider: string
     available: boolean
   }>
+  isLoading?: boolean
 }
 
-export function ModelDropdown({ selectedModel, onModelChange, availableModels }: ModelDropdownProps) {
+export function ModelDropdown({ selectedModel, onModelChange, availableModels, isLoading }: ModelDropdownProps) {
   const [isOpen, setIsOpen] = useState(false)
   
-  // Merge static model data with available models from the API
-  const mergedModels = staticModels.map(staticModel => {
-    const availableModel = availableModels?.find(am => am.id === staticModel.id)
+  // If we have available models, use them; otherwise show loading or empty state
+  const models = availableModels?.map(model => {
+    const displayInfo = getModelDisplayInfo(model.id, model.name);
     return {
-      ...staticModel,
-      available: availableModel?.available ?? staticModel.available
-    }
-  })
+      ...model,
+      ...displayInfo,
+      description: `${model.provider} model - ${model.name}`,
+      premium: false, // For now, assume all API models are available (can be enhanced later)
+    };
+  }) || [];
 
-  const currentModel = mergedModels.find((m) => m.id === selectedModel) || mergedModels[0]!
+  const currentModel = models.find((m) => m.id === selectedModel) || models[0];
 
   const handleModelSelect = (modelId: string, available: boolean) => {
     if (!available) return
     onModelChange(modelId)
     setIsOpen(false)
+  }
+
+  // Handle loading state
+  if (isLoading) {
+    return (
+      <Button
+        variant="ghost"
+        disabled
+        className="h-10 px-4 text-sm font-semibold text-muted-foreground rounded-full"
+      >
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        Loading models...
+      </Button>
+    );
+  }
+
+  // Handle empty state
+  if (!models.length) {
+    return (
+      <Button
+        variant="ghost"
+        disabled
+        className="h-10 px-4 text-sm font-semibold text-muted-foreground rounded-full"
+      >
+        <span className="mr-2 text-base">❌</span>
+        No models available
+      </Button>
+    );
   }
 
   return (
@@ -128,8 +103,8 @@ export function ModelDropdown({ selectedModel, onModelChange, availableModels }:
           className="h-10 px-4 text-sm font-semibold text-foreground hover:text-foreground 
                    hover:bg-gradient-to-r hover:from-muted/40 hover:to-muted/20 transition-all duration-200 group rounded-full"
         >
-          <span className="mr-2 text-base">{currentModel.icon}</span>
-          {currentModel.name}
+          <span className="mr-2 text-base">{currentModel?.icon || "🤖"}</span>
+          {currentModel?.name || "Select Model"}
           <ChevronDown className={`ml-2 h-3 w-3 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`} />
         </Button>
       </DropdownMenuTrigger>
@@ -159,7 +134,7 @@ export function ModelDropdown({ selectedModel, onModelChange, availableModels }:
 
         {/* Model List */}
         <div className="p-3 max-h-80 overflow-y-auto custom-scrollbar">
-          {mergedModels.map((model, index) => (
+          {models.map((model, index) => (
             <DropdownMenuItem
               key={model.id}
               className={`flex items-center justify-between p-4 cursor-pointer rounded-2xl m-1
@@ -200,6 +175,7 @@ export function ModelDropdown({ selectedModel, onModelChange, availableModels }:
                     )}
                   </div>
                   <span className="text-xs text-muted-foreground font-medium">{model.description}</span>
+                  <span className="text-xs text-muted-foreground/60 font-medium capitalize">{model.provider}</span>
                 </div>
               </div>
               <div className="flex items-center gap-2 ml-3">
@@ -228,27 +204,24 @@ export function ModelDropdown({ selectedModel, onModelChange, availableModels }:
           ))}
         </div>
 
-        {/* Show All Button */}
+        {/* Footer */}
         <div className="p-4 border-t border-border/30 bg-gradient-to-r from-muted/10 to-transparent rounded-b-3xl">
           <div className="flex items-center justify-between">
-            <Button
-              variant="ghost"
-              className="text-sm font-semibold text-muted-foreground hover:text-foreground rounded-full hover:bg-gradient-to-r hover:from-muted/30 hover:to-muted/20"
-            >
-              Show all
-              <ChevronDown className="ml-1 h-3 w-3" />
-            </Button>
+            <div className="text-xs text-muted-foreground font-medium">
+              {models.length} model{models.length !== 1 ? 's' : ''} available
+            </div>
             <Button
               variant="ghost"
               size="icon"
               className="rounded-full hover:bg-gradient-to-r hover:from-muted/30 hover:to-muted/20"
+              title="Refresh models"
             >
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
                   strokeWidth={2}
-                  d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
                 />
               </svg>
             </Button>
