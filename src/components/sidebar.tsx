@@ -194,7 +194,7 @@ export function Sidebar({
           {/* Chat History */}
           <div className="flex-1 mb-6 overflow-hidden">
             {user ? (
-              <div className="space-y-2 h-full overflow-y-auto custom-scrollbar scroll-container">
+              <div className="space-y-2 h-full overflow-y-auto scrollbar-thin">
                 {!isCollapsed && filteredConversations.length > 0 && (
                   <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide px-2 mb-3">
                     Recent Chats

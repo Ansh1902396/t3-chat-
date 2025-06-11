@@ -180,7 +180,7 @@ export function CodeBlock({
       {isExpanded && (
         <div className="relative overflow-hidden rounded-b-lg border-x border-b border-border/50">
           <div 
-            className="overflow-auto custom-scrollbar scroll-container" 
+            className="overflow-auto scrollbar-code" 
             style={{ maxHeight: `${maxHeight}px` }}
           >
             <SyntaxHighlighter

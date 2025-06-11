@@ -133,7 +133,7 @@ export function ModelDropdown({ selectedModel, onModelChange, availableModels, i
         </div>
 
         {/* Model List */}
-        <div className="p-3 max-h-80 overflow-y-auto custom-scrollbar">
+        <div className="p-3 max-h-80 overflow-y-auto scrollbar-dropdown">
           {models.map((model, index) => (
             <DropdownMenuItem
               key={model.id}

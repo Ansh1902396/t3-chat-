@@ -276,7 +276,7 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
         <div className="flex-scroll-container">
           {!hasMessages ? (
             // Welcome Screen
-            <div className="flex-1 flex flex-col items-center justify-center p-8 max-w-6xl mx-auto w-full overflow-y-auto">
+            <div className="flex-1 flex flex-col items-center justify-center p-8 max-w-6xl mx-auto w-full overflow-y-auto custom-scrollbar">
               <div className="text-center mb-12 w-full animate-fade-in">
                 <h1 className="text-6xl font-black mb-4 text-balance tracking-tight bg-gradient-to-br from-foreground via-foreground to-muted-foreground bg-clip-text text-transparent">
                   How can I help you{user ? `, ${user.name.split(" ")[0]}` : ""}?
@@ -323,7 +323,7 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
             </div>
           ) : (
             // Messages Area
-            <div className="messages-scroll-area p-4 space-y-6">
+            <div className="messages-scroll-area p-4 space-y-6 scrollbar-messages scrollbar-glow">
               <div className="max-w-4xl mx-auto w-full space-y-6">
                 {messages.map((msg) => (
                   <div
