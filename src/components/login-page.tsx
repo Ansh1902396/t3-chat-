@@ -1,29 +1,21 @@
 "use client"
 
 import { useState } from "react"
+import { signIn } from "next-auth/react"
 import { Button } from "~/components/ui/button"
 
-interface LoginPageProps {
-  onLogin: (user: any) => void
-}
-
-export function LoginPage({ onLogin }: LoginPageProps) {
+export function LoginPage() {
   const [isLoading, setIsLoading] = useState(false)
 
-  const handleGoogleSignIn = () => {
-    setIsLoading(true)
-    setTimeout(() => {
-      const mockUser = {
-        id: "1",
-        name: "John Doe",
-        email: "john.doe@gmail.com",
-        avatar: "/placeholder.svg?height=40&width=40",
-        plan: "Pro",
-        credits: 100,
-      }
-      onLogin(mockUser)
+  const handleGoogleSignIn = async () => {
+    try {
+      setIsLoading(true)
+      await signIn("google", { callbackUrl: "/" })
+    } catch (error) {
+      console.error("Error signing in:", error)
+    } finally {
       setIsLoading(false)
-    }, 2000)
+    }
   }
 
   return (

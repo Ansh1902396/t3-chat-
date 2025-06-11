@@ -3,12 +3,14 @@ import type { Metadata } from "next"
 import { Inter } from "next/font/google"
 import "~/styles/globals.css"
 import { ThemeProvider } from "next-themes"
+import { SessionProvider } from "next-auth/react"
+import { TRPCReactProvider } from "~/trpc/react"
 
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "Next.js Community Starter",
-  description: "A modern Next.js starter with theme support",
+  title: "T3 Chat - AI Conversations",
+  description: "A modern AI chat application built with T3 stack",
 }
 
 export default function RootLayout({
@@ -19,9 +21,13 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-          {children}
-        </ThemeProvider>
+        <SessionProvider>
+          <TRPCReactProvider>
+            <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+              {children}
+            </ThemeProvider>
+          </TRPCReactProvider>
+        </SessionProvider>
       </body>
     </html>
   )
