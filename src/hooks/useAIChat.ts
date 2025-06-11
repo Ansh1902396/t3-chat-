@@ -4,11 +4,22 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { api } from "~/trpc/react";
 import type { AIProvider } from "~/server/lib/ai-model-manager";
 
+export interface MessageAttachment {
+  id: string;
+  fileName: string;
+  fileType: 'image' | 'document' | 'audio' | 'video';
+  fileSize: number;
+  mimeType: string;
+  cloudinaryId?: string;
+  url: string;
+}
+
 export interface Message {
   id: string;
   role: "system" | "user" | "assistant";
   content: string;
   timestamp: Date;
+  attachments?: MessageAttachment[];
 }
 
 export interface ChatConfig {
@@ -84,12 +95,13 @@ export function useAIChat(options: UseAIChatOptions = {}) {
   }, []);
 
   // Add a message to the chat
-  const addMessage = useCallback((role: Message["role"], content: string) => {
+  const addMessage = useCallback((role: Message["role"], content: string, attachments?: MessageAttachment[]) => {
     const newMessage: Message = {
       id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       role,
       content,
       timestamp: new Date(),
+      attachments: attachments?.length ? attachments : undefined,
     };
 
     setMessages(prev => [...prev, newMessage]);
@@ -126,11 +138,11 @@ export function useAIChat(options: UseAIChatOptions = {}) {
   const sendMessage = useCallback(async (
     content: string,
     config: ChatConfig,
-    systemMessage?: string
+    attachments: MessageAttachment[] = []
   ) => {
     try {
       // Add user message
-      const userMessage = addMessage("user", content);
+      const userMessage = addMessage("user", content, attachments);
 
       // Prepare messages array with formatting system prompt
       const defaultSystemPrompt = `You are a helpful AI assistant. When providing code examples, always format them properly using markdown code blocks with language specification.
@@ -151,7 +163,7 @@ For inline code, use single backticks: \`variableName\` or \`functionName()\`.
 Format your responses with proper markdown structure including headers, lists, and code blocks as appropriate.`;
 
       const messagesForAPI = [
-        { role: "system" as const, content: systemMessage || defaultSystemPrompt },
+        { role: "system" as const, content: defaultSystemPrompt },
         ...messages.map(msg => ({ role: msg.role, content: msg.content })),
         { role: "user" as const, content }
       ];
@@ -180,11 +192,11 @@ Format your responses with proper markdown structure including headers, lists, a
   const sendMessageStream = useCallback(async (
     content: string,
     config: ChatConfig,
-    systemMessage?: string
+    attachments: MessageAttachment[] = []
   ) => {
     try {
       // Add user message
-      const userMessage = addMessage("user", content);
+      const userMessage = addMessage("user", content, attachments);
 
       // Prepare messages array with formatting system prompt
       const defaultSystemPrompt = `You are a helpful AI assistant. When providing code examples, always format them properly using markdown code blocks with language specification.
@@ -205,7 +217,7 @@ For inline code, use single backticks: \`variableName\` or \`functionName()\`.
 Format your responses with proper markdown structure including headers, lists, and code blocks as appropriate.`;
 
       const messagesForAPI = [
-        { role: "system" as const, content: systemMessage || defaultSystemPrompt },
+        { role: "system" as const, content: defaultSystemPrompt },
         ...messages.map(msg => ({ role: msg.role, content: msg.content })),
         { role: "user" as const, content }
       ];

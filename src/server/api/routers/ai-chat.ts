@@ -11,9 +11,20 @@ import type { CoreMessage } from "ai";
 import { TRPCError } from "@trpc/server";
 
 // Validation schemas
+const attachmentSchema = z.object({
+  id: z.string(),
+  fileName: z.string(),
+  fileType: z.enum(["image", "document", "audio", "video"]),
+  fileSize: z.number(),
+  mimeType: z.string(),
+  cloudinaryId: z.string(),
+  url: z.string(),
+});
+
 const messageSchema = z.object({
   role: z.enum(["system", "user", "assistant"]),
   content: z.string(),
+  attachments: z.array(attachmentSchema).optional(),
 });
 
 const aiConfigSchema = z.object({
@@ -316,15 +327,32 @@ Format your responses with proper markdown structure including headers, lists, a
           });
         }
         
-        // Add messages
-        await ctx.db.message.createMany({
-          data: input.messages.map(msg => ({
-            conversationId: conversation.id,
-            role: msg.role,
-            content: msg.content,
-            timestamp: new Date(),
-          })),
-        });
+        // Add messages with attachments
+        for (const msg of input.messages) {
+          const message = await ctx.db.message.create({
+            data: {
+              conversationId: conversation.id,
+              role: msg.role,
+              content: msg.content,
+              timestamp: new Date(),
+            },
+          });
+
+          // Add attachments if present
+          if (msg.attachments && msg.attachments.length > 0) {
+            await ctx.db.attachment.createMany({
+              data: msg.attachments.map(attachment => ({
+                messageId: message.id,
+                fileName: attachment.fileName,
+                fileType: attachment.fileType,
+                fileSize: attachment.fileSize,
+                mimeType: attachment.mimeType,
+                cloudinaryId: attachment.cloudinaryId,
+                url: attachment.url,
+              })),
+            });
+          }
+        }
         
         return {
           conversationId: conversation.id,
@@ -359,6 +387,9 @@ Format your responses with proper markdown structure including headers, lists, a
             messages: {
               orderBy: {
                 timestamp: 'asc',
+              },
+              include: {
+                attachments: true,
               },
             },
             config: true,

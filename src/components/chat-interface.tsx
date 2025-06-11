@@ -8,9 +8,11 @@ import { Input } from "~/components/ui/input"
 import { Sidebar } from "./sidebar"
 import { ModelDropdown } from "./model-dropdown"
 import { ThemeToggle } from "./theme-toggle"
-import { Menu, Sparkles, Search, Code, GraduationCap, Paperclip, ArrowUp, User, Bot } from "lucide-react"
+import { Menu, Sparkles, Search, Code, GraduationCap, Paperclip, ArrowUp, User, Bot, X } from "lucide-react"
 import { MarkdownRenderer } from "./ui/markdown-renderer"
 import { StreamingMarkdown } from "./ui/streaming-markdown"
+import { FileUpload } from "./ui/file-upload"
+import { FileAttachmentList } from "./ui/file-attachment"
 import { useAIChat, type ChatConfig } from "~/hooks/useAIChat"
 import { cn } from "~/lib/utils"
 
@@ -68,6 +70,16 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
   const [message, setMessage] = useState("")
   const [selectedModel, setSelectedModel] = useState("gemini-1.5-flash")
   const [currentConversationId, setCurrentConversationId] = useState<string | undefined>()
+  const [showFileUpload, setShowFileUpload] = useState(false)
+  const [attachedFiles, setAttachedFiles] = useState<Array<{
+    id: string;
+    fileName: string;
+    fileType: 'image' | 'document' | 'audio' | 'video';
+    fileSize: number;
+    mimeType: string;
+    url: string;
+    cloudinaryId?: string;
+  }>>([])
   const inputRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -139,7 +151,7 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
   }, [])
 
   const handleSendMessage = () => {
-    if (!message.trim() || isStreaming || isGenerating) return
+    if ((!message.trim() && attachedFiles.length === 0) || isStreaming || isGenerating) return
     
     const config: ChatConfig = {
       provider: getProviderFromModel(selectedModel),
@@ -148,8 +160,24 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
       temperature: 0.7,
     }
     
-    sendMessageStream(message, config)
+    // Include attachments in the message
+    const messageWithAttachments = {
+      content: message,
+      attachments: attachedFiles.map(file => ({
+        id: file.id,
+        fileName: file.fileName,
+        fileType: file.fileType,
+        fileSize: file.fileSize,
+        mimeType: file.mimeType,
+        cloudinaryId: file.cloudinaryId,
+        url: file.url,
+      }))
+    }
+    
+    sendMessageStream(message, config, messageWithAttachments.attachments)
     setMessage("")
+    setAttachedFiles([])
+    setShowFileUpload(false)
   }
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -173,6 +201,36 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
       setMessage("")
     }, 100)
   }
+
+  // File handling functions
+  const handleFilesUploaded = (files: Array<{
+    id: string;
+    fileName: string;
+    fileType: 'image' | 'document' | 'audio' | 'video';
+    fileSize: number;
+    mimeType: string;
+    url: string;
+    cloudinaryId?: string;
+  }>) => {
+    setAttachedFiles(prev => [...prev, ...files]);
+    setShowFileUpload(false);
+  };
+
+  const handleRemoveFile = (fileId: string) => {
+    setAttachedFiles(prev => prev.filter(file => file.id !== fileId));
+  };
+
+  const handleDownloadFile = (file: {
+    id: string;
+    fileName: string;
+    fileType: 'image' | 'document' | 'audio' | 'video';
+    fileSize: number;
+    mimeType: string;
+    url: string;
+    cloudinaryId?: string;
+  }) => {
+    window.open(file.url, '_blank');
+  };
 
   // Helper function to determine provider from model name
   const getProviderFromModel = (modelId: string) => {
@@ -416,6 +474,38 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
               </div>
             )}
 
+            {/* File Upload Component */}
+            {showFileUpload && (
+              <div className="mb-6">
+                <div className="relative">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="absolute top-2 right-2 h-8 w-8 z-10"
+                    onClick={() => setShowFileUpload(false)}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                  <FileUpload onFilesUploaded={handleFilesUploaded} />
+                </div>
+              </div>
+            )}
+
+            {/* Attached Files List */}
+            {attachedFiles.length > 0 && (
+              <div className="mb-6">
+                <div className="mb-3">
+                  <h4 className="text-sm font-semibold text-muted-foreground">Attached Files:</h4>
+                </div>
+                <FileAttachmentList
+                  attachments={attachedFiles}
+                  showPreviews={true}
+                  onRemove={handleRemoveFile}
+                  onDownload={handleDownloadFile}
+                />
+              </div>
+            )}
+
             {/* Message Input */}
             <div className="relative card-t3 rounded-3xl border-2 border-border/50 shadow-xl">
               <div className="flex items-center p-5 gap-4">
@@ -440,6 +530,7 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                   variant="ghost"
                   size="icon"
                   className="h-10 w-10 text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-all rounded-full"
+                  onClick={() => setShowFileUpload(!showFileUpload)}
                 >
                   <Paperclip className="h-4 w-4" />
                 </Button>
@@ -473,7 +564,7 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                 <Button
                   size="icon"
                   onClick={handleSendMessage}
-                  disabled={!message.trim() || isStreaming || isGenerating}
+                  disabled={(!message.trim() && attachedFiles.length === 0) || isStreaming || isGenerating}
                   className="h-10 w-10 btn-t3-primary text-white rounded-full shadow-lg disabled:opacity-50 
                            disabled:cursor-not-allowed transition-all duration-200"
                 >

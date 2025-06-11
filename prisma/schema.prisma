@@ -84,8 +84,24 @@ model Message {
     role           String       // "system" | "user" | "assistant"
     content        String       @db.Text
     timestamp      DateTime     @default(now())
+    attachments    Attachment[]
 
     @@index([conversationId, timestamp])
+}
+
+model Attachment {
+    id          String  @id @default(cuid())
+    messageId   String
+    message     Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+    fileName    String
+    fileType    String  // "image" | "document" | "audio" | "video"
+    fileSize    Int     // in bytes
+    mimeType    String
+    cloudinaryId String
+    url         String
+    createdAt   DateTime @default(now())
+
+    @@index([messageId])
 }
 
 model ChatConfig {
