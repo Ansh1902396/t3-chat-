@@ -8,7 +8,9 @@ import { Input } from "~/components/ui/input"
 import { Sidebar } from "./sidebar"
 import { ModelDropdown } from "./model-dropdown"
 import { ThemeToggle } from "./theme-toggle"
-import { Menu, Sparkles, Search, Code, GraduationCap, Paperclip, ArrowUp } from "lucide-react"
+import { Menu, Sparkles, Search, Code, GraduationCap, Paperclip, ArrowUp, User, Bot } from "lucide-react"
+import { useAIChat, type ChatConfig } from "~/hooks/useAIChat"
+import { cn } from "~/lib/utils"
 
 interface User {
   id: string
@@ -63,8 +65,40 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [message, setMessage] = useState("")
   const [selectedModel, setSelectedModel] = useState("gemini-2.5-flash")
-  const [isTyping, setIsTyping] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  // Initialize AI Chat hook
+  const {
+    messages,
+    isStreaming,
+    currentStreamContent,
+    isGenerating,
+    availableModels,
+    sendMessageStream,
+    clearChat,
+  } = useAIChat({
+    onError: (error) => {
+      console.error("AI Chat Error:", error)
+      // You could add a toast notification here
+    },
+  })
+
+  // Transform availableModels data structure for the dropdown
+  const transformedAvailableModels = availableModels ? 
+    Object.entries(availableModels.models).flatMap(([provider, models]) =>
+      Object.entries(models).map(([modelId, modelData]) => ({
+        id: modelId,
+        name: modelData.name,
+        provider: provider,
+        available: true // All models returned from API are available
+      }))
+    ) : undefined
+
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [messages, currentStreamContent])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -79,9 +113,16 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
   }, [])
 
   const handleSendMessage = () => {
-    if (!message.trim()) return
-    setIsTyping(true)
-    setTimeout(() => setIsTyping(false), 2000)
+    if (!message.trim() || isStreaming || isGenerating) return
+    
+    const config: ChatConfig = {
+      provider: getProviderFromModel(selectedModel),
+      model: selectedModel,
+      maxTokens: 2000,
+      temperature: 0.7,
+    }
+    
+    sendMessageStream(message, config)
     setMessage("")
   }
 
@@ -91,6 +132,32 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
       handleSendMessage()
     }
   }
+
+  const handleSampleQuestionClick = (question: string) => {
+    setMessage(question)
+    // Auto-send the sample question
+    setTimeout(() => {
+      const config: ChatConfig = {
+        provider: getProviderFromModel(selectedModel),
+        model: selectedModel,
+        maxTokens: 2000,
+        temperature: 0.7,
+      }
+      sendMessageStream(question, config)
+      setMessage("")
+    }, 100)
+  }
+
+  // Helper function to determine provider from model name
+  const getProviderFromModel = (modelId: string) => {
+    if (modelId.startsWith("gemini")) return "google" as const
+    if (modelId.startsWith("gpt") || modelId.startsWith("o4")) return "openai" as const
+    if (modelId.startsWith("claude")) return "anthropic" as const
+    if (modelId.startsWith("deepseek")) return "openai" as const // assuming OpenAI compatible
+    return "google" as const // default
+  }
+
+  const hasMessages = messages.length > 0 || isStreaming
 
   return (
     <div className="flex h-screen bg-background">
@@ -116,12 +183,34 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
             <Menu className="h-5 w-5" />
           </Button>
           <h1 className="font-bold tracking-tight text-lg">T3.chat</h1>
-          <ThemeToggle />
+          <div className="flex items-center gap-2">
+            {hasMessages && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={clearChat}
+                className="text-xs"
+              >
+                Clear
+              </Button>
+            )}
+            <ThemeToggle />
+          </div>
         </div>
 
         {/* Desktop Header */}
         <div className="hidden lg:flex items-center justify-end p-6 bg-background/50 backdrop-blur-xl">
           <div className="flex items-center gap-4">
+            {hasMessages && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={clearChat}
+                className="text-sm"
+              >
+                Clear Chat
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="icon"
@@ -134,78 +223,144 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
         </div>
 
         {/* Chat Area */}
-        <div className="flex-1 flex flex-col items-center justify-center p-8 max-w-6xl mx-auto w-full">
-          <div className="text-center mb-12 w-full animate-fade-in">
-            <h1 className="text-6xl font-black mb-4 text-balance tracking-tight bg-gradient-to-br from-foreground via-foreground to-muted-foreground bg-clip-text text-transparent">
-              How can I help you{user ? `, ${user.name.split(" ")[0]}` : ""}?
-            </h1>
+        <div className="flex-1 flex flex-col">
+          {!hasMessages ? (
+            // Welcome Screen
+            <div className="flex-1 flex flex-col items-center justify-center p-8 max-w-6xl mx-auto w-full">
+              <div className="text-center mb-12 w-full animate-fade-in">
+                <h1 className="text-6xl font-black mb-4 text-balance tracking-tight bg-gradient-to-br from-foreground via-foreground to-muted-foreground bg-clip-text text-transparent">
+                  How can I help you{user ? `, ${user.name.split(" ")[0]}` : ""}?
+                </h1>
 
-            {/* Category Buttons */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 justify-center mb-16 max-w-4xl mx-auto">
-              {categoryButtons.map((category, index) => (
-                <Button
-                  key={category.label}
-                  variant="outline"
-                  className={`flex flex-col items-center gap-4 h-auto p-8 bg-gradient-to-br ${category.color}
-                           hover:bg-muted/40 hover:border-border transition-all duration-300 
-                           card-t3 group animate-fade-in rounded-3xl border-2`}
-                  style={{ animationDelay: `${index * 0.1}s` }}
-                >
-                  <category.icon className="h-8 w-8 text-muted-foreground group-hover:text-foreground transition-colors" />
-                  <div className="text-center">
-                    <div className="font-bold text-base tracking-tight mb-1">{category.label}</div>
-                    <div className="text-sm text-muted-foreground font-medium">{category.description}</div>
+                {/* Category Buttons */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 justify-center mb-16 max-w-4xl mx-auto">
+                  {categoryButtons.map((category, index) => (
+                    <Button
+                      key={category.label}
+                      variant="outline"
+                      className={`flex flex-col items-center gap-4 h-auto p-8 bg-gradient-to-br ${category.color}
+                               hover:bg-muted/40 hover:border-border transition-all duration-300 
+                               card-t3 group animate-fade-in rounded-3xl border-2`}
+                      style={{ animationDelay: `${index * 0.1}s` }}
+                    >
+                      <category.icon className="h-8 w-8 text-muted-foreground group-hover:text-foreground transition-colors" />
+                      <div className="text-center">
+                        <div className="font-bold text-base tracking-tight mb-1">{category.label}</div>
+                        <div className="text-sm text-muted-foreground font-medium">{category.description}</div>
+                      </div>
+                    </Button>
+                  ))}
+                </div>
+
+                {/* Sample Questions */}
+                <div className="space-y-4 max-w-2xl mx-auto mb-12">
+                  {sampleQuestions.map((question, index) => (
+                    <Button
+                      key={index}
+                      variant="ghost"
+                      className="w-full text-left justify-start h-auto p-6 text-muted-foreground 
+                               hover:text-foreground hover:bg-muted/30 rounded-2xl transition-all duration-200 
+                               animate-fade-in group border border-transparent hover:border-border/50"
+                      onClick={() => handleSampleQuestionClick(question)}
+                      style={{ animationDelay: `${(index + 4) * 0.1}s` }}
+                    >
+                      <span className="font-semibold text-base">{question}</span>
+                      <ArrowUp className="ml-auto h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity rotate-45" />
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : (
+            // Messages Area
+            <div className="flex-1 overflow-y-auto p-4 space-y-6">
+              <div className="max-w-4xl mx-auto w-full space-y-6">
+                {messages.map((msg) => (
+                  <div
+                    key={msg.id}
+                    className={cn(
+                      "flex gap-4 group",
+                      msg.role === "user" ? "justify-end" : "justify-start"
+                    )}
+                  >
+                    {msg.role === "assistant" && (
+                      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center">
+                        <Bot className="h-4 w-4 text-primary" />
+                      </div>
+                    )}
+                    <div
+                      className={cn(
+                        "max-w-[80%] rounded-2xl px-4 py-3 text-sm",
+                        msg.role === "user"
+                          ? "bg-primary text-primary-foreground ml-auto"
+                          : "bg-muted/50"
+                      )}
+                    >
+                      <div className="whitespace-pre-wrap">{msg.content}</div>
+                      <div className="text-xs opacity-60 mt-2">
+                        {msg.timestamp.toLocaleTimeString()}
+                      </div>
+                    </div>
+                    {msg.role === "user" && (
+                      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-muted/40 to-muted/60 flex items-center justify-center">
+                        <User className="h-4 w-4" />
+                      </div>
+                    )}
                   </div>
-                </Button>
-              ))}
-            </div>
+                ))}
 
-            {/* Sample Questions */}
-            <div className="space-y-4 max-w-2xl mx-auto mb-12">
-              {sampleQuestions.map((question, index) => (
-                <Button
-                  key={index}
-                  variant="ghost"
-                  className="w-full text-left justify-start h-auto p-6 text-muted-foreground 
-                           hover:text-foreground hover:bg-muted/30 rounded-2xl transition-all duration-200 
-                           animate-fade-in group border border-transparent hover:border-border/50"
-                  onClick={() => setMessage(question)}
-                  style={{ animationDelay: `${(index + 4) * 0.1}s` }}
-                >
-                  <span className="font-semibold text-base">{question}</span>
-                  <ArrowUp className="ml-auto h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity rotate-45" />
-                </Button>
-              ))}
+                {/* Streaming Message */}
+                {isStreaming && (
+                  <div className="flex gap-4 group justify-start">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center">
+                      <Bot className="h-4 w-4 text-primary animate-pulse" />
+                    </div>
+                    <div className="max-w-[80%] rounded-2xl px-4 py-3 text-sm bg-muted/50">
+                      <div className="whitespace-pre-wrap">{currentStreamContent}</div>
+                      {currentStreamContent && (
+                        <div className="inline-block w-2 h-4 bg-primary/60 animate-pulse ml-1" />
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div ref={messagesEndRef} />
             </div>
-          </div>
+          )}
         </div>
 
         {/* Footer */}
         <div className="p-8 border-t border-border/30 bg-background/80 backdrop-blur-xl">
           <div className="max-w-5xl mx-auto">
-            <div className="text-center text-sm text-muted-foreground mb-8 font-semibold">
-              Make sure you agree to our{" "}
-              <Button
-                variant="link"
-                className="p-0 h-auto text-sm text-muted-foreground hover:text-foreground 
-                         underline underline-offset-4 font-semibold transition-colors"
-              >
-                Terms
-              </Button>{" "}
-              and our{" "}
-              <Button
-                variant="link"
-                className="p-0 h-auto text-sm text-muted-foreground hover:text-foreground 
-                         underline underline-offset-4 font-semibold transition-colors"
-              >
-                Privacy Policy
-              </Button>
-            </div>
+            {!hasMessages && (
+              <div className="text-center text-sm text-muted-foreground mb-8 font-semibold">
+                Make sure you agree to our{" "}
+                <Button
+                  variant="link"
+                  className="p-0 h-auto text-sm text-muted-foreground hover:text-foreground 
+                           underline underline-offset-4 font-semibold transition-colors"
+                >
+                  Terms
+                </Button>{" "}
+                and our{" "}
+                <Button
+                  variant="link"
+                  className="p-0 h-auto text-sm text-muted-foreground hover:text-foreground 
+                           underline underline-offset-4 font-semibold transition-colors"
+                >
+                  Privacy Policy
+                </Button>
+              </div>
+            )}
 
             {/* Message Input */}
             <div className="relative card-t3 rounded-3xl border-2 border-border/50 shadow-xl">
               <div className="flex items-center p-5 gap-4">
-                <ModelDropdown selectedModel={selectedModel} onModelChange={setSelectedModel} />
+                <ModelDropdown 
+                  selectedModel={selectedModel} 
+                  onModelChange={setSelectedModel} 
+                  availableModels={transformedAvailableModels}
+                />
 
                 <div className="h-8 w-px bg-border/50" />
 
@@ -232,10 +387,11 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                     value={message}
                     onChange={(e) => setMessage(e.target.value)}
                     onKeyPress={handleKeyPress}
+                    disabled={isStreaming || isGenerating}
                     className="border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 
                              placeholder:text-muted-foreground/60 text-base font-medium pr-16 py-3"
                   />
-                  {isTyping && (
+                  {(isStreaming || isGenerating) && (
                     <div className="absolute right-4 top-1/2 transform -translate-y-1/2">
                       <div className="flex space-x-1">
                         {[0, 1, 2].map((i) => (
@@ -253,11 +409,11 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                 <Button
                   size="icon"
                   onClick={handleSendMessage}
-                  disabled={!message.trim() || isTyping}
+                  disabled={!message.trim() || isStreaming || isGenerating}
                   className="h-10 w-10 btn-t3-primary text-white rounded-full shadow-lg disabled:opacity-50 
                            disabled:cursor-not-allowed transition-all duration-200"
                 >
-                  {isTyping ? (
+                  {isStreaming || isGenerating ? (
                     <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
                   ) : (
                     <ArrowUp className="h-4 w-4" />

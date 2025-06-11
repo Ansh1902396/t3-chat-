@@ -33,7 +33,7 @@ export function useAIChat(options: UseAIChatOptions = {}) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [currentStreamContent, setCurrentStreamContent] = useState("");
-  const subscriptionRef = useRef<any>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Get available models
   const { data: availableModels, isLoading: modelsLoading } = 
@@ -97,71 +97,74 @@ export function useAIChat(options: UseAIChatOptions = {}) {
     }
   }, [messages, addMessage, generateResponse, options.onError]);
 
-  // Send message with streaming response
-  const sendMessageStream = useCallback((
+  // Send message with simulated streaming response
+  const sendMessageStream = useCallback(async (
     content: string,
     config: ChatConfig,
     systemMessage?: string
   ) => {
-    // Add user message
-    const userMessage = addMessage("user", content);
+    try {
+      // Add user message
+      const userMessage = addMessage("user", content);
 
-    // Prepare messages array
-    const messagesForAPI = [
-      ...(systemMessage ? [{ role: "system" as const, content: systemMessage }] : []),
-      ...messages.map(msg => ({ role: msg.role, content: msg.content })),
-      { role: "user" as const, content }
-    ];
+      // Prepare messages array
+      const messagesForAPI = [
+        ...(systemMessage ? [{ role: "system" as const, content: systemMessage }] : []),
+        ...messages.map(msg => ({ role: msg.role, content: msg.content })),
+        { role: "user" as const, content }
+      ];
 
-    setIsStreaming(true);
-    setCurrentStreamContent("");
-    options.onStreamStart?.();
+      setIsStreaming(true);
+      setCurrentStreamContent("");
+      options.onStreamStart?.();
 
-    // Subscribe to streaming response
-    subscriptionRef.current = api.aiChat.streamResponse.useSubscription(
-      {
+      // Create abort controller for cancellation
+      abortControllerRef.current = new AbortController();
+
+      // Generate response (non-streaming for now)
+      const response = await generateResponse.mutateAsync({
         messages: messagesForAPI,
         config,
-      },
-      {
-        onData: (data) => {
-          if (data.type === "chunk") {
-            setCurrentStreamContent(prev => prev + data.content);
-          } else if (data.type === "end") {
-            // Finalize the assistant message
-            setMessages(prev => [
-              ...prev,
-              {
-                id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                role: "assistant",
-                content: currentStreamContent,
-                timestamp: new Date(),
-              }
-            ]);
-            
-            setIsStreaming(false);
-            setCurrentStreamContent("");
-            options.onStreamEnd?.();
-          } else if (data.type === "error") {
-            setIsStreaming(false);
-            setCurrentStreamContent("");
-            options.onError?.(new Error(data.message));
-          }
-        },
-        onError: (error) => {
-          setIsStreaming(false);
-          setCurrentStreamContent("");
-          options.onError?.(new Error(error.message || 'Streaming error'));
-        },
+      });
+
+      // Simulate streaming by gradually revealing the content
+      const fullContent = response.content;
+      const words = fullContent.split(' ');
+      let currentContent = '';
+      
+      for (let i = 0; i < words.length; i++) {
+        if (abortControllerRef.current?.signal.aborted) {
+          break;
+        }
+        
+        currentContent += (i > 0 ? ' ' : '') + words[i];
+        setCurrentStreamContent(currentContent);
+        
+        // Small delay to simulate streaming
+        await new Promise(resolve => setTimeout(resolve, 50));
       }
-    );
-  }, [messages, addMessage, currentStreamContent, options]);
+
+      // Finalize the assistant message
+      if (!abortControllerRef.current?.signal.aborted) {
+        addMessage("assistant", fullContent);
+      }
+      
+      setIsStreaming(false);
+      setCurrentStreamContent("");
+      options.onStreamEnd?.();
+
+    } catch (error) {
+      setIsStreaming(false);
+      setCurrentStreamContent("");
+      options.onError?.(error as Error);
+    }
+  }, [messages, addMessage, generateResponse, options]);
 
   // Stop streaming
   const stopStreaming = useCallback(() => {
-    if (subscriptionRef.current) {
-      subscriptionRef.current.unsubscribe();
-      subscriptionRef.current = null;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
     }
     setIsStreaming(false);
     setCurrentStreamContent("");

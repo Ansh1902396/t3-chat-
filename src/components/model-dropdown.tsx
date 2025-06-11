@@ -5,7 +5,8 @@ import { Badge } from "~/components/ui/badge"
 import { ChevronDown, Eye, FileText, Info, Crown, Sparkles } from "lucide-react"
 import { useState } from "react"
 
-const models = [
+// Static model data for UI - this could be moved to a config file
+const staticModels = [
   {
     id: "gemini-2.5-flash",
     name: "Gemini 2.5 Flash",
@@ -14,6 +15,7 @@ const models = [
     available: true,
     premium: false,
     description: "Fast and efficient responses",
+    provider: "google" as const,
   },
   {
     id: "gemini-2.5-pro",
@@ -23,6 +25,17 @@ const models = [
     available: false,
     premium: true,
     description: "Advanced reasoning capabilities",
+    provider: "google" as const,
+  },
+  {
+    id: "gpt-4",
+    name: "GPT-4",
+    icon: "🤖",
+    features: ["eye", "link", "file", "info"],
+    available: true,
+    premium: false,
+    description: "Most capable GPT model",
+    provider: "openai" as const,
   },
   {
     id: "gpt-imagegen",
@@ -32,15 +45,17 @@ const models = [
     available: true,
     premium: false,
     description: "AI-powered image generation",
+    provider: "openai" as const,
   },
   {
     id: "o4-mini",
-    name: "o4-mini",
+    name: "GPT-4o Mini",
     icon: "🔷",
     features: ["eye", "info"],
     available: true,
     premium: false,
     description: "Compact and efficient model",
+    provider: "openai" as const,
   },
   {
     id: "claude-4-sonnet",
@@ -50,6 +65,7 @@ const models = [
     available: true,
     premium: false,
     description: "Balanced performance and accuracy",
+    provider: "anthropic" as const,
   },
   {
     id: "claude-4-sonnet-reasoning",
@@ -59,6 +75,7 @@ const models = [
     available: false,
     premium: true,
     description: "Enhanced logical reasoning",
+    provider: "anthropic" as const,
   },
   {
     id: "deepseek-r1",
@@ -68,17 +85,40 @@ const models = [
     available: false,
     premium: true,
     description: "Research-focused model",
+    provider: "openai" as const,
   },
 ]
 
 interface ModelDropdownProps {
   selectedModel: string
   onModelChange: (modelId: string) => void
+  availableModels?: Array<{
+    id: string
+    name: string
+    provider: string
+    available: boolean
+  }>
 }
 
-export function ModelDropdown({ selectedModel, onModelChange }: ModelDropdownProps) {
+export function ModelDropdown({ selectedModel, onModelChange, availableModels }: ModelDropdownProps) {
   const [isOpen, setIsOpen] = useState(false)
-  const currentModel = models.find((m) => m.id === selectedModel) || models[0]
+  
+  // Merge static model data with available models from the API
+  const mergedModels = staticModels.map(staticModel => {
+    const availableModel = availableModels?.find(am => am.id === staticModel.id)
+    return {
+      ...staticModel,
+      available: availableModel?.available ?? staticModel.available
+    }
+  })
+
+  const currentModel = mergedModels.find((m) => m.id === selectedModel) || mergedModels[0]!
+
+  const handleModelSelect = (modelId: string, available: boolean) => {
+    if (!available) return
+    onModelChange(modelId)
+    setIsOpen(false)
+  }
 
   return (
     <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
@@ -119,7 +159,7 @@ export function ModelDropdown({ selectedModel, onModelChange }: ModelDropdownPro
 
         {/* Model List */}
         <div className="p-3 max-h-80 overflow-y-auto custom-scrollbar">
-          {models.map((model, index) => (
+          {mergedModels.map((model, index) => (
             <DropdownMenuItem
               key={model.id}
               className={`flex items-center justify-between p-4 cursor-pointer rounded-2xl m-1
@@ -132,7 +172,7 @@ export function ModelDropdown({ selectedModel, onModelChange }: ModelDropdownPro
                            ? "bg-gradient-to-r from-muted/60 to-muted/40 shadow-sm border border-border/50"
                            : ""
                        }`}
-              onClick={() => model.available && onModelChange(model.id)}
+              onClick={() => handleModelSelect(model.id, model.available)}
               disabled={!model.available}
               style={{ animationDelay: `${index * 0.05}s` }}
             >
@@ -148,6 +188,14 @@ export function ModelDropdown({ selectedModel, onModelChange }: ModelDropdownPro
                       >
                         <Crown className="mr-1 h-2.5 w-2.5" />
                         Pro
+                      </Badge>
+                    )}
+                    {selectedModel === model.id && (
+                      <Badge
+                        variant="default"
+                        className="text-xs px-2 py-1 bg-primary/20 text-primary border-primary/20 rounded-full font-bold"
+                      >
+                        Active
                       </Badge>
                     )}
                   </div>
