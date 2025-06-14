@@ -3,6 +3,7 @@
 import { useSession, signOut } from "next-auth/react"
 import { ChatInterface } from "~/components/chat-interface"
 import { LoginPage } from "~/components/login-page"
+import { CommandPaletteProvider } from "~/components/command-palette-provider"
 import { api } from "~/trpc/react"
 
 export default function Page() {
@@ -39,5 +40,9 @@ export default function Page() {
     credits: userStats?.credits || 100,
   }
 
-  return <ChatInterface user={user} onLogout={handleLogout} />
+  return (
+    <CommandPaletteProvider>
+      <ChatInterface user={user} onLogout={handleLogout} />
+    </CommandPaletteProvider>
+  )
 }

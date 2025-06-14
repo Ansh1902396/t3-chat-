@@ -140,31 +140,59 @@ export class AIModelManager {
     const client = this.getProviderClient(provider);
     const modelId = this.buildModelIdentifier(provider, model);
 
-    try {
-      const result = await generateText({
-        model: client(model),
-        messages,
-        maxTokens: params.maxTokens ?? 1000,
-        temperature: params.temperature ?? 0.7,
-        topP: params.topP,
-        topK: params.topK,
-        presencePenalty: params.presencePenalty,
-        frequencyPenalty: params.frequencyPenalty,
-      });
+    let attempts = 0;
+    const maxAttempts = 3;
+    const baseDelay = 1000; // 1 second
 
-      return {
-        content: result.text,
-        usage: result.usage ? {
-          promptTokens: result.usage.promptTokens,
-          completionTokens: result.usage.completionTokens,
-          totalTokens: result.usage.totalTokens,
-        } : undefined,
-        finishReason: result.finishReason,
-      };
-    } catch (error) {
-      console.error(`Error generating response with ${modelId}:`, error);
-      throw new Error(`Failed to generate response: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    while (attempts < maxAttempts) {
+      try {
+        const result = await generateText({
+          model: client(model),
+          messages,
+          maxTokens: params.maxTokens ?? 1000,
+          temperature: params.temperature ?? 0.7,
+          topP: params.topP,
+          topK: params.topK,
+          presencePenalty: params.presencePenalty,
+          frequencyPenalty: params.frequencyPenalty,
+        });
+
+        return {
+          content: result.text,
+          usage: result.usage ? {
+            promptTokens: result.usage.promptTokens,
+            completionTokens: result.usage.completionTokens,
+            totalTokens: result.usage.totalTokens,
+          } : undefined,
+          finishReason: result.finishReason,
+        };
+      } catch (error: any) {
+        attempts++;
+        console.error(`Error generating response with ${modelId} (attempt ${attempts}/${maxAttempts}):`, error);
+        
+        // Check if it's a quota/rate limit error
+        if (error?.statusCode === 429 || error?.message?.includes('quota') || error?.message?.includes('rate limit')) {
+          if (attempts < maxAttempts) {
+            // Exponential backoff with jitter
+            const delay = baseDelay * Math.pow(2, attempts - 1) + Math.random() * 1000;
+            console.log(`Rate limit hit, retrying after ${delay}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          } else {
+            // If all retries failed, provide a helpful error message
+            throw new Error(`Service temporarily unavailable due to rate limits. Please try again in a few minutes. Original error: ${error.message}`);
+          }
+        }
+        
+        // For other errors, fail immediately
+        if (attempts >= maxAttempts) {
+          throw new Error(`Failed to generate response after ${maxAttempts} attempts: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+      }
     }
+
+    // This should never be reached, but TypeScript needs it
+    throw new Error('Maximum retry attempts exceeded');
   }
 
   public async *generateStreamResponse(request: ChatRequest): AsyncGenerator<string, void, unknown> {
