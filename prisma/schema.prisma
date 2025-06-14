@@ -67,6 +67,8 @@ model VerificationToken {
 model Conversation {
     id        String      @id @default(cuid())
     title     String?
+    summary   String?     @db.Text // AI-generated summary for search
+    embedding String?     @db.Text // JSON string of vector embeddings for now
     createdAt DateTime    @default(now())
     updatedAt DateTime    @updatedAt
     userId    String

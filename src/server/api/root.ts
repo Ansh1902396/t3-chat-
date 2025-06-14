@@ -1,6 +1,7 @@
 import { authRouter } from "~/server/api/routers/auth";
 import { aiChatRouter } from "~/server/api/routers/ai-chat";
 import { fileUploadRouter } from "~/server/api/routers/file-upload";
+import { searchRouter } from "~/server/api/routers/search";
 import { createCallerFactory, createTRPCRouter } from "~/server/api/trpc";
 
 /**
@@ -12,6 +13,7 @@ export const appRouter = createTRPCRouter({
   auth: authRouter,
   aiChat: aiChatRouter,
   fileUpload: fileUploadRouter,
+  search: searchRouter,
 });
 
 // export type definition of API

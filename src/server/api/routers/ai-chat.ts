@@ -9,6 +9,9 @@ import {
 } from "~/server/lib/ai-model-manager";
 import type { CoreMessage } from "ai";
 import { TRPCError } from "@trpc/server";
+import OpenAI from "openai";
+import { env } from "~/env";
+import { db } from "~/server/db";
 
 // Validation schemas
 const attachmentSchema = z.object({
@@ -61,6 +64,63 @@ function generateConversationTitle(firstMessage: string): string {
   }
   
   return truncated + '...';
+}
+
+// Initialize OpenAI client
+const openai = new OpenAI({
+  apiKey: env.OPENAI_API_KEY,
+});
+
+// Helper function to queue summary generation
+async function queueSummaryGeneration(conversationId: string, messages: Array<{ role: string; content: string }>) {
+  try {
+    // Create context from messages
+    const context = messages
+      .map((msg) => `${msg.role}: ${msg.content}`)
+      .join("\n");
+
+    if (!context) {
+      return;
+    }
+
+    // Generate summary
+    const summaryResponse = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: "You are a helpful assistant that creates concise, searchable summaries of conversations. Focus on the main topics, key points, and context that would help someone find this conversation later. Keep it under 200 words.",
+        },
+        {
+          role: "user",
+          content: `Please summarize this conversation:\n\n${context}`,
+        },
+      ],
+      max_tokens: 300,
+      temperature: 0.3,
+    });
+
+    const summary = summaryResponse.choices[0]?.message?.content ?? "";
+
+    // Generate embedding for the summary
+    const embeddingResponse = await openai.embeddings.create({
+      model: "text-embedding-3-small",
+      input: summary,
+    });
+
+    const embedding = JSON.stringify(embeddingResponse.data[0]!.embedding);
+
+    // Update conversation with summary and embedding
+    await db.conversation.update({
+      where: { id: conversationId },
+      data: {
+        summary,
+        embedding,
+      },
+    });
+  } catch (error) {
+    console.error(`Error generating summary for conversation ${conversationId}:`, error);
+  }
 }
 
 export const aiChatRouter = createTRPCRouter({
@@ -167,18 +227,66 @@ Format your responses with proper markdown structure including headers, lists, a
           ? input.messages 
           : [systemPrompt, ...input.messages];
 
-        // Generate response
-        const response = await aiModelManager.generateResponse({
-          messages: messages as CoreMessage[],
-          config: input.config as AIModelConfig,
+        // Define fallback providers in order of preference
+        const fallbackProviders: Array<{ provider: AIProvider; model: string }> = [
+          { provider: input.config.provider, model: input.config.model }, // Original choice
+          { provider: "google", model: "gemini-1.5-flash" }, // Fast and reliable fallback
+          { provider: "anthropic", model: "claude-3-5-haiku-20241022" }, // Alternative fallback
+        ];
+
+        // Remove duplicates and invalid providers
+        const validFallbacks = fallbackProviders.filter((fallback, index, arr) => {
+          const isUnique = arr.findIndex(f => f.provider === fallback.provider && f.model === fallback.model) === index;
+          return isUnique && aiModelManager.getAvailableProviders().includes(fallback.provider);
         });
 
-        return {
-          content: response.content,
-          usage: response.usage,
-          finishReason: response.finishReason,
-          success: true,
-        };
+        let lastError: Error | null = null;
+
+        // Try each provider in sequence
+        for (const fallback of validFallbacks) {
+          try {
+            const config = {
+              ...input.config,
+              provider: fallback.provider,
+              model: fallback.model,
+            };
+
+            // Generate response
+            const response = await aiModelManager.generateResponse({
+              messages: messages as CoreMessage[],
+              config: config as AIModelConfig,
+            });
+
+            return {
+              content: response.content,
+              usage: response.usage,
+              finishReason: response.finishReason,
+              success: true,
+              provider: fallback.provider, // Include which provider was actually used
+              model: fallback.model,
+            };
+          } catch (error) {
+            console.error(`Failed with provider ${fallback.provider}:`, error);
+            lastError = error as Error;
+            
+            // If it's a quota/rate limit error, try the next provider immediately
+            if (error instanceof Error && (
+              error.message.includes('quota') || 
+              error.message.includes('rate limit') ||
+              error.message.includes('429')
+            )) {
+              continue;
+            }
+            
+            // For other errors, also try the next provider but log it differently
+            console.log(`Trying next provider due to error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            continue;
+          }
+        }
+
+        // If all providers failed, throw the last error
+        throw lastError || new Error('All providers failed');
+
       } catch (error) {
         console.error("Error generating AI response:", error);
         
@@ -186,9 +294,15 @@ Format your responses with proper markdown structure including headers, lists, a
           throw error;
         }
         
+        // Provide more helpful error message
+        const errorMessage = error instanceof Error ? error.message : "Failed to generate response";
+        const isQuotaError = errorMessage.includes('quota') || errorMessage.includes('rate limit');
+        
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: error instanceof Error ? error.message : "Failed to generate response",
+          message: isQuotaError 
+            ? "AI service temporarily unavailable due to high demand. Please try again in a few minutes."
+            : errorMessage,
         });
       }
     }),
@@ -352,6 +466,13 @@ Format your responses with proper markdown structure including headers, lists, a
               })),
             });
           }
+        }
+        
+        // Auto-generate summary for conversations with multiple messages (always update to keep fresh)
+        if (input.messages.length >= 2) {
+          // Queue summary generation asynchronously (don't await to avoid slowing down the save)
+          // Always regenerate to keep summaries fresh and up-to-date
+          queueSummaryGeneration(conversation.id, input.messages).catch(console.error);
         }
         
         return {
