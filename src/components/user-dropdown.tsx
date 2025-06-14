@@ -32,11 +32,14 @@ export function UserDropdown({ user, onLogout }: UserDropdownProps) {
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
-          className="w-full justify-start p-3 h-auto hover:bg-gradient-to-r hover:from-muted/40 hover:to-muted/20 
+          className="w-full justify-start p-3 h-auto hover:bg-gradient-to-r hover:from-muted/40 hover:to-muted/20 \
                    transition-all duration-200 rounded-2xl group border border-transparent hover:border-border/50"
         >
           <div className="flex items-center gap-3 w-full">
-            <Avatar className="h-10 w-10 border-2 border-border/50 ring-2 ring-transparent group-hover:ring-primary/20 transition-all">
+            <Avatar
+              className="transition-all duration-300 h-10 w-10 min-h-[40px] min-w-[40px] max-h-[48px] max-w-[48px] rounded-full flex items-center justify-center border-2 border-border/50 ring-2 ring-transparent group-hover:ring-primary/20 \
+              sidebar-collapsed:h-10 sidebar-collapsed:w-10 sidebar-collapsed:min-h-[40px] sidebar-collapsed:min-w-[40px] sidebar-collapsed:max-h-[40px] sidebar-collapsed:max-w-[40px]"
+            >
               <AvatarImage src={user.avatar || "/placeholder.svg"} alt={user.name} />
               <AvatarFallback className="bg-gradient-to-br from-primary/20 to-primary/10 text-primary font-bold">
                 {user.name

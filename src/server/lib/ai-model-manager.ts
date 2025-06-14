@@ -20,11 +20,13 @@ export const AI_MODELS = {
     'gpt-4o-mini': { name: 'GPT-4o Mini', description: 'Faster, cost-effective GPT-4' },
     'gpt-4-turbo': { name: 'GPT-4 Turbo', description: 'High-performance GPT-4' },
     'gpt-3.5-turbo': { name: 'GPT-3.5 Turbo', description: 'Fast and efficient' },
+    
   },
   [AI_PROVIDERS.ANTHROPIC]: {
     'claude-3-5-sonnet-20241022': { name: 'Claude 3.5 Sonnet', description: 'Most capable Claude model' },
     'claude-3-5-haiku-20241022': { name: 'Claude 3.5 Haiku', description: 'Fast and efficient Claude' },
     'claude-3-opus-20240229': { name: 'Claude 3 Opus', description: 'Previous generation flagship' },
+    'claude-4-sonnet-20250514': { name: 'Claude 4 Sonnet', description: 'Most capable Claude model' },
   },
   [AI_PROVIDERS.GOOGLE]: {
     'gemini-1.5-pro': { name: 'Gemini 1.5 Pro', description: 'Google\'s most capable model' },
