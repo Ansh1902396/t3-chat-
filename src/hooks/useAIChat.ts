@@ -188,7 +188,7 @@ Format your responses with proper markdown structure including headers, lists, a
     }
   }, [messages, addMessage, generateResponse, autoSaveConversation, options.onError]);
 
-  // Send message with simulated streaming response
+  // Send message with streaming response
   const sendMessageStream = useCallback(async (
     content: string,
     config: ChatConfig,
@@ -238,30 +238,45 @@ Format your responses with proper markdown structure including headers, lists, a
       // Simulate streaming by gradually revealing the content
       const fullContent = response.content;
       let currentContent = '';
+      let lastUpdateTime = Date.now();
+      const minUpdateInterval = 16; // ~60fps
       
       // Stream character by character for more realistic effect
       for (let i = 0; i < fullContent.length; i++) {
         if (abortControllerRef.current?.signal.aborted) {
+          // If aborted, add the partial message and break
+          if (currentContent.trim()) {
+            const assistantMessage = addMessage("assistant", currentContent + " [stopped]");
+            const finalMessages = [...messages, userMessage, assistantMessage];
+            await autoSaveConversation(finalMessages, config);
+          }
           break;
         }
         
         currentContent += fullContent[i];
-        setCurrentStreamContent(currentContent);
+        
+        // Throttle updates to prevent UI jank
+        const now = Date.now();
+        if (now - lastUpdateTime >= minUpdateInterval) {
+          setCurrentStreamContent(currentContent);
+          lastUpdateTime = now;
+        }
         
         // Variable delay based on character type
         const char = fullContent[i] || '';
-        let delay = 20; // base delay
+        let delay = 10; // base delay (faster)
         
-        if (char === '\n') delay = 100; // pause at line breaks
-        else if (char === ' ') delay = 30; // slightly longer for spaces
-        else if (/[.!?]/.test(char)) delay = 200; // pause at sentence endings
-        else if (/[,;:]/.test(char)) delay = 80; // pause at punctuation
+        if (char === '\n') delay = 50; // shorter pause at line breaks
+        else if (char === ' ') delay = 15; // shorter for spaces
+        else if (/[.!?]/.test(char)) delay = 100; // shorter pause at sentence endings
+        else if (/[,;:]/.test(char)) delay = 40; // shorter pause at punctuation
         
         await new Promise(resolve => setTimeout(resolve, delay));
       }
 
-      // Finalize the assistant message
+      // Final update to ensure we show all content
       if (!abortControllerRef.current?.signal.aborted) {
+        setCurrentStreamContent(fullContent);
         const assistantMessage = addMessage("assistant", fullContent);
         
         // Auto-save conversation
@@ -277,17 +292,19 @@ Format your responses with proper markdown structure including headers, lists, a
       setIsStreaming(false);
       setCurrentStreamContent("");
       options.onError?.(error as Error);
+    } finally {
+      abortControllerRef.current = null;
     }
   }, [messages, addMessage, generateResponse, autoSaveConversation, options]);
 
-  // Stop streaming
+  // Stop streaming with proper cleanup
   const stopStreaming = useCallback(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
     setIsStreaming(false);
-    setCurrentStreamContent("");
+    // Don't clear currentStreamContent immediately to show partial response
   }, []);
 
   // Clear chat

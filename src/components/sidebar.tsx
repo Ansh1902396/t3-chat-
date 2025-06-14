@@ -122,21 +122,21 @@ export function Sidebar({
       {/* Sidebar */}
       <div
         className={`
-        fixed left-0 top-0 h-full bg-background/95 backdrop-blur-xl border-r border-border/50 z-50 
-        transform transition-all duration-300 ease-out will-change-transform sidebar-container
-        ${isOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full"}
-        lg:translate-x-0 lg:static lg:z-auto lg:shadow-none lg:bg-background lg:backdrop-blur-none
-        ${isCollapsed ? "lg:w-16" : "lg:w-72"}
-      `}
+          fixed left-0 top-0 h-full bg-background/95 backdrop-blur-xl border-r border-border/50 z-50 
+          transform transition-all duration-300 ease-out will-change-transform
+          ${isOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full"}
+          lg:translate-x-0 lg:static lg:z-auto lg:shadow-none lg:bg-background/80 lg:backdrop-blur-xl
+          ${isCollapsed ? "lg:w-16" : "lg:w-80"}
+        `}
         style={{ 
-          width: isOpen ? "288px" : isCollapsed ? "64px" : "288px",
-          minWidth: isCollapsed ? "64px" : "288px",
-          maxWidth: isCollapsed ? "64px" : "288px"
+          width: isOpen ? "320px" : isCollapsed ? "64px" : "320px",
+          minWidth: isCollapsed ? "64px" : "320px",
+          maxWidth: isCollapsed ? "64px" : "320px"
         }}
       >
-                  <div className={`flex flex-col h-full ${isCollapsed ? "p-2" : "p-4"}`}>
+        <div className={`flex flex-col h-full ${isCollapsed ? "p-2" : "p-4"} gap-4`}>
           {/* Header */}
-          <div className={`flex items-center mb-6 ${isCollapsed ? "justify-center flex-col gap-3" : "justify-between"}`}>
+          <div className={`flex items-center ${isCollapsed ? "justify-center flex-col gap-3" : "justify-between"}`}>
             {!isCollapsed && (
               <div className="flex items-center gap-3 flex-1">
                 <Button
@@ -175,7 +175,7 @@ export function Sidebar({
           </div>
 
           {/* New Chat Button */}
-          <div className={`mb-6 ${isCollapsed ? "flex justify-center" : ""}`}>
+          <div className={`${isCollapsed ? "flex justify-center" : ""}`}>
             <Button
               onClick={onNewChat}
               className={`bg-gradient-to-r from-primary via-primary to-primary/80 hover:from-primary/90 hover:via-primary/90 hover:to-primary/70
@@ -194,15 +194,18 @@ export function Sidebar({
 
           {/* Search */}
           {!isCollapsed && (
-            <div className="mb-6">
+            <div>
               <Button
                 variant="outline"
                 onClick={openCommandPalette}
-                className="w-full justify-start pl-4 py-3 rounded-full border-border/50 hover:border-primary/30 hover:bg-gradient-to-r hover:from-muted/30 hover:to-muted/20 transition-all text-muted-foreground hover:text-foreground"
+                className="w-full justify-start pl-4 py-3 rounded-full border-border/50 
+                         hover:border-primary/30 hover:bg-gradient-to-r hover:from-muted/30 hover:to-muted/20 
+                         transition-all duration-200 text-muted-foreground hover:text-foreground
+                         shadow-sm hover:shadow-md"
               >
-                <Search className="h-4 w-4 mr-3" />
-                <span className="flex-1 text-left">Search conversations...</span>
-                <div className="flex items-center space-x-1 text-xs opacity-60">
+                <Search className="h-4 w-4 mr-3 flex-shrink-0" />
+                <span className="flex-1 text-left truncate">Search conversations...</span>
+                <div className="flex items-center space-x-1 text-xs opacity-60 ml-2 flex-shrink-0">
                   <kbd className="px-1.5 py-0.5 bg-muted rounded text-xs font-mono">
                     {isMac ? "⌘" : "Ctrl"}
                   </kbd>
@@ -214,12 +217,13 @@ export function Sidebar({
 
           {/* Search Icon for Collapsed */}
           {isCollapsed && (
-            <div className="mb-6 flex justify-center">
+            <div className="flex justify-center">
               <Button
                 variant="ghost"
                 size="icon"
                 onClick={openCommandPalette}
-                className="w-10 h-10 hover:bg-gradient-to-r hover:from-muted/50 hover:to-muted/30 transition-all rounded-2xl shadow-sm hover:shadow-md"
+                className="w-10 h-10 hover:bg-gradient-to-r hover:from-muted/50 hover:to-muted/30 
+                         transition-all duration-200 rounded-2xl shadow-sm hover:shadow-md"
                 title="Search conversations (Cmd+K)"
               >
                 <Search className="h-3.5 w-3.5 text-muted-foreground" />
@@ -228,9 +232,9 @@ export function Sidebar({
           )}
 
           {/* Chat History */}
-          <div className="flex-1 mb-6 overflow-hidden">
+          <div className="flex-1 overflow-hidden">
             {user ? (
-              <div className="space-y-2 h-full overflow-y-auto scrollbar-thin">
+              <div className="space-y-2 h-full overflow-y-auto custom-scrollbar">
                 {/* Loading State */}
                 {isLoading && (
                   <div className="text-center text-muted-foreground text-sm py-8">
@@ -354,7 +358,7 @@ export function Sidebar({
 
           {/* User Section */}
           {user && (
-            <div className="border-t border-border/50 pt-4">
+            <div className="border-t border-border/50 pt-4 mt-auto">
               {isCollapsed ? (
                 <div className="flex justify-center">
                   <UserDropdown user={user} onLogout={onLogout} />

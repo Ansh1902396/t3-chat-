@@ -2,19 +2,22 @@
 
 import type React from "react"
 
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, useCallback } from "react"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { Sidebar } from "./sidebar"
 import { ModelDropdown } from "./model-dropdown"
 import { ThemeToggle } from "./theme-toggle"
-import { Menu, Sparkles, Search, Code, GraduationCap, Paperclip, ArrowUp, User, Bot, X } from "lucide-react"
+import { Menu, Sparkles, Search, Code, GraduationCap, Paperclip, ArrowUp, User, Bot, X, MoreVertical, Copy, Trash2, Edit2 } from "lucide-react"
 import { MarkdownRenderer } from "./ui/markdown-renderer"
 import { StreamingMarkdown } from "./ui/streaming-markdown"
 import { FileUpload } from "./ui/file-upload"
 import { FileAttachmentList } from "./ui/file-attachment"
-import { useAIChat, type ChatConfig } from "~/hooks/useAIChat"
+import { useAIChat, type ChatConfig, type Message } from "~/hooks/useAIChat"
 import { cn } from "~/lib/utils"
+import { useInView } from "react-intersection-observer"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "~/components/ui/dialog"
+import { ScrollArea } from "~/components/ui/scroll-area"
 
 interface User {
   id: string
@@ -82,6 +85,18 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
   }>>([])
   const inputRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const [isAutoScrolling, setIsAutoScrolling] = useState(true)
+  const [shouldScrollToBottom, setShouldScrollToBottom] = useState(false)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const lastScrollHeightRef = useRef<number>(0)
+  const lastScrollTopRef = useRef<number>(0)
+  const { ref: bottomRef, inView } = useInView({
+    threshold: 0.5,
+    initialInView: true,
+  })
+  const [selectedMessage, setSelectedMessage] = useState<Message | null>(null)
+  const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const scrollTimeoutRef = useRef<NodeJS.Timeout>()
 
   // Initialize AI Chat hook
   const {
@@ -149,6 +164,101 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
     document.addEventListener("keydown", handleKeyDown)
     return () => document.removeEventListener("keydown", handleKeyDown)
   }, [])
+
+  // Improved scroll handling with debounce
+  const handleScroll = useCallback(() => {
+    if (!messagesContainerRef.current) return
+    
+    const container = messagesContainerRef.current
+    const { scrollTop, scrollHeight, clientHeight } = container
+    
+    // Clear any existing timeout
+    if (scrollTimeoutRef.current) {
+      clearTimeout(scrollTimeoutRef.current)
+    }
+    
+    // Store last scroll position with debounce
+    scrollTimeoutRef.current = setTimeout(() => {
+      lastScrollTopRef.current = scrollTop
+      lastScrollHeightRef.current = scrollHeight
+      
+      // Check if we're near bottom (within 100px)
+      const isNearBottom = scrollHeight - scrollTop - clientHeight < 100
+      
+      // Update auto-scroll state
+      setIsAutoScrolling(isNearBottom)
+      
+      // If we're near bottom and streaming, ensure we stay there
+      if (isNearBottom && isStreaming) {
+        setShouldScrollToBottom(true)
+      }
+    }, 100) // 100ms debounce
+  }, [isStreaming])
+
+  // Cleanup scroll timeout
+  useEffect(() => {
+    return () => {
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  // Improved scroll to bottom behavior
+  const scrollToBottom = useCallback((smooth = true) => {
+    if (!messagesContainerRef.current) return
+    
+    const container = messagesContainerRef.current
+    const { scrollHeight, clientHeight } = container
+    
+    // Prevent scroll jumps by checking if we're already at bottom
+    const isAtBottom = scrollHeight - container.scrollTop - clientHeight < 10
+    if (isAtBottom && !smooth) return
+    
+    requestAnimationFrame(() => {
+      container.scrollTo({
+        top: scrollHeight - clientHeight,
+        behavior: smooth ? "smooth" : "auto"
+      })
+    })
+  }, [])
+
+  // Handle new messages and streaming
+  useEffect(() => {
+    if (!messagesContainerRef.current) return
+
+    const container = messagesContainerRef.current
+    const { scrollTop, scrollHeight, clientHeight } = container
+    const wasNearBottom = scrollHeight - scrollTop - clientHeight < 100
+
+    // If we were near bottom or should scroll (during streaming), scroll to bottom
+    if (wasNearBottom || shouldScrollToBottom) {
+      // Use smooth scrolling for user messages, instant for streaming
+      scrollToBottom(!isStreaming)
+    }
+
+    // Reset scroll flag after handling
+    if (shouldScrollToBottom) {
+      setShouldScrollToBottom(false)
+    }
+  }, [messages, currentStreamContent, isStreaming, shouldScrollToBottom, scrollToBottom])
+
+  // Reset scroll behavior when streaming ends
+  useEffect(() => {
+    if (!isStreaming && shouldScrollToBottom) {
+      setShouldScrollToBottom(false)
+    }
+  }, [isStreaming, shouldScrollToBottom])
+
+  // Add stop streaming function
+  const stopStreaming = () => {
+    if (isStreaming) {
+      // You'll need to implement this in your useAIChat hook
+      // For now, we'll just log it
+      console.log("Stopping stream...");
+      // Add your stop streaming logic here
+    }
+  };
 
   const handleSendMessage = () => {
     if ((!message.trim() && attachedFiles.length === 0) || isStreaming || isGenerating) return
@@ -257,6 +367,22 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
 
   const hasMessages = messages.length > 0 || isStreaming
 
+  // Handle message actions
+  const handleCopyMessage = (content: string) => {
+    navigator.clipboard.writeText(content)
+    // You could add a toast notification here
+  }
+
+  const handleDeleteMessage = (messageId: string) => {
+    // Implement message deletion logic
+    console.log("Delete message:", messageId)
+  }
+
+  const handleEditMessage = (message: Message) => {
+    setSelectedMessage(message)
+    setIsDialogOpen(true)
+  }
+
   return (
     <div className="flex h-screen bg-background overflow-hidden">
       <Sidebar
@@ -331,7 +457,7 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
         </div>
 
         {/* Chat Area */}
-        <div className="flex-scroll-container">
+        <div className="flex-1 flex flex-col min-h-0 relative">
           {!hasMessages ? (
             // Welcome Screen
             <div className="flex-1 flex flex-col items-center justify-center p-8 max-w-6xl mx-auto w-full overflow-y-auto custom-scrollbar">
@@ -381,70 +507,182 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
             </div>
           ) : (
             // Messages Area
-            <div className="messages-scroll-area p-4 space-y-6 scrollbar-messages scrollbar-glow">
-              <div className="max-w-4xl mx-auto w-full space-y-6">
-                {messages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={cn(
-                      "flex gap-4 group message-container",
-                      msg.role === "user" ? "justify-end" : "justify-start"
-                    )}
-                  >
-                    {msg.role === "assistant" && (
-                      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center">
-                        <Bot className="h-4 w-4 text-primary" />
-                      </div>
-                    )}
+            <div 
+              ref={messagesContainerRef}
+              onScroll={handleScroll}
+              className="flex-1 overflow-y-auto custom-scrollbar"
+            >
+              <div className="messages-scroll-area p-4 space-y-6 min-h-full">
+                <div className="max-w-4xl mx-auto w-full space-y-6 pb-4">
+                  {messages.map((msg) => (
                     <div
+                      key={msg.id}
                       className={cn(
-                        "max-w-[80%] rounded-2xl text-sm",
-                        msg.role === "user"
-                          ? "bg-primary text-primary-foreground ml-auto px-4 py-3"
-                          : "bg-muted/50 overflow-hidden"
+                        "group relative flex gap-4 message-container animate-fade-in",
+                        msg.role === "user" ? "justify-end" : "justify-start"
                       )}
+                      style={{ 
+                        animationDuration: "0.3s",
+                        animationFillMode: "both"
+                      }}
                     >
-                      {msg.role === "assistant" ? (
-                        <div className="p-4">
-                          <MarkdownRenderer>{msg.content}</MarkdownRenderer>
-                          <div className="text-xs opacity-60 mt-3 pt-2 border-t border-border/20">
-                            {msg.timestamp.toLocaleTimeString()}
+                      {msg.role === "assistant" && (
+                        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center shadow-sm">
+                          <Bot className="h-4 w-4 text-primary" />
+                        </div>
+                      )}
+                      
+                      <Dialog open={isDialogOpen && selectedMessage?.id === msg.id} onOpenChange={(open) => {
+                        setIsDialogOpen(open)
+                        if (!open) setSelectedMessage(null)
+                      }}>
+                        <div className="relative group/message">
+                          <div
+                            className={cn(
+                              "max-w-[80%] text-sm transition-all duration-200",
+                              msg.role === "user"
+                                ? "bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 ml-auto px-4 py-3 rounded-2xl shadow-sm hover:shadow-md backdrop-blur-sm"
+                                : "ml-12" // Add margin for assistant messages to align with avatar
+                            )}
+                          >
+                            {msg.role === "assistant" ? (
+                              <div className="prose prose-sm dark:prose-invert max-w-none">
+                                <MarkdownRenderer>{msg.content}</MarkdownRenderer>
+                                <div className="flex items-center justify-between mt-2">
+                                  <div className="text-xs text-muted-foreground">
+                                    {msg.timestamp.toLocaleTimeString()}
+                                  </div>
+                                  <DialogTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-6 w-6 opacity-0 group-hover/message:opacity-100 transition-opacity"
+                                      onClick={() => setSelectedMessage(msg)}
+                                    >
+                                      <MoreVertical className="h-3 w-3" />
+                                    </Button>
+                                  </DialogTrigger>
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                <div className="whitespace-pre-wrap text-black dark:text-white/90">{msg.content}</div>
+                                <div className="flex items-center justify-between mt-2 pt-2 border-t border-black/10 dark:border-white/10">
+                                  <div className="text-xs text-black/60 dark:text-white/60">
+                                    {msg.timestamp.toLocaleTimeString()}
+                                  </div>
+                                  <DialogTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-6 w-6 opacity-0 group-hover/message:opacity-100 transition-opacity text-black/60 dark:text-white/60 hover:bg-black/5 dark:hover:bg-white/5"
+                                      onClick={() => setSelectedMessage(msg)}
+                                    >
+                                      <MoreVertical className="h-3 w-3" />
+                                    </Button>
+                                  </DialogTrigger>
+                                </div>
+                              </>
+                            )}
                           </div>
                         </div>
-                      ) : (
-                        <>
-                          <div className="whitespace-pre-wrap">{msg.content}</div>
-                          <div className="text-xs opacity-60 mt-2">
-                            {msg.timestamp.toLocaleTimeString()}
+
+                        <DialogContent className="sm:max-w-[600px]">
+                          <DialogHeader>
+                            <DialogTitle>Message Options</DialogTitle>
+                          </DialogHeader>
+                          <div className="grid gap-4 py-4">
+                            <ScrollArea className="max-h-[300px] rounded-lg border p-4">
+                              <div className="whitespace-pre-wrap text-sm">
+                                {msg.content}
+                              </div>
+                            </ScrollArea>
+                            <div className="flex justify-end gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleCopyMessage(msg.content)}
+                                className="gap-2"
+                              >
+                                <Copy className="h-4 w-4" />
+                                Copy
+                              </Button>
+                              {msg.role === "user" && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleEditMessage(msg)}
+                                  className="gap-2"
+                                >
+                                  <Edit2 className="h-4 w-4" />
+                                  Edit
+                                </Button>
+                              )}
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={() => handleDeleteMessage(msg.id)}
+                                className="gap-2"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                                Delete
+                              </Button>
+                            </div>
                           </div>
-                        </>
+                        </DialogContent>
+                      </Dialog>
+
+                      {msg.role === "user" && (
+                        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-muted/40 to-muted/60 flex items-center justify-center shadow-sm">
+                          <User className="h-4 w-4" />
+                        </div>
                       )}
                     </div>
-                    {msg.role === "user" && (
-                      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-muted/40 to-muted/60 flex items-center justify-center">
-                        <User className="h-4 w-4" />
-                      </div>
-                    )}
-                  </div>
-                ))}
+                  ))}
 
-                {/* Streaming Message */}
-                {isStreaming && (
-                  <div className="flex gap-4 group justify-start">
-                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center">
-                      <Bot className="h-4 w-4 text-primary animate-pulse" />
-                    </div>
-                    <div className="max-w-[80%] rounded-2xl text-sm bg-muted/50 overflow-hidden">
-                      <div className="p-4">
-                        <StreamingMarkdown 
-                          content={currentStreamContent} 
-                          isStreaming={true}
-                        />
+                  {/* Streaming Message */}
+                  {isStreaming && (
+                    <div 
+                      className="flex gap-4 group message-container animate-fade-in" 
+                      style={{ 
+                        animationDuration: "0.3s",
+                        animationFillMode: "both"
+                      }}
+                    >
+                      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-black/10 to-black/20 dark:from-white/10 dark:to-white/20 flex items-center justify-center shadow-sm">
+                        <Bot className="h-4 w-4 text-black/70 dark:text-white/70 animate-pulse" />
+                      </div>
+                      <div className="ml-12">
+                        <div className="prose prose-sm dark:prose-invert max-w-none">
+                          <StreamingMarkdown 
+                            content={currentStreamContent} 
+                            isStreaming={true}
+                          />
+                          <div className="flex items-center gap-2 mt-2">
+                            <div className="text-xs text-muted-foreground">
+                              {new Date().toLocaleTimeString()}
+                            </div>
+                            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                              <div className="w-1.5 h-1.5 bg-black/40 dark:bg-white/40 rounded-full animate-pulse" />
+                              <div className="w-1.5 h-1.5 bg-black/40 dark:bg-white/40 rounded-full animate-pulse" style={{ animationDelay: "0.2s" }} />
+                              <div className="w-1.5 h-1.5 bg-black/40 dark:bg-white/40 rounded-full animate-pulse" style={{ animationDelay: "0.4s" }} />
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )}
-                <div ref={messagesEndRef} />
+                  )}
+                  
+                  {/* Scroll anchor */}
+                  <div 
+                    ref={bottomRef}
+                    className="h-4 w-full"
+                    style={{ 
+                      visibility: "hidden",
+                      pointerEvents: "none"
+                    }}
+                  />
+                </div>
               </div>
             </div>
           )}
@@ -543,11 +781,26 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                     onChange={(e) => setMessage(e.target.value)}
                     onKeyPress={handleKeyPress}
                     disabled={isStreaming || isGenerating}
-                    className="border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 
-                             placeholder:text-muted-foreground/60 text-base font-medium pr-16 py-3"
+                    className={cn(
+                      "border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0",
+                      "placeholder:text-muted-foreground/60 text-base font-medium py-3",
+                      "transition-all duration-200",
+                      isStreaming ? "pr-32" : "pr-24"
+                    )}
                   />
-                  {(isStreaming || isGenerating) && (
-                    <div className="absolute right-4 top-1/2 transform -translate-y-1/2">
+                  <div className="absolute right-4 top-1/2 transform -translate-y-1/2 flex items-center gap-2">
+                    {isStreaming && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={stopStreaming}
+                        className="h-8 px-3 text-xs font-medium text-destructive hover:text-destructive/90 
+                                 hover:bg-destructive/10 transition-colors rounded-full"
+                      >
+                        Stop
+                      </Button>
+                    )}
+                    {(isStreaming || isGenerating) && (
                       <div className="flex space-x-1">
                         {[0, 1, 2].map((i) => (
                           <div
@@ -557,16 +810,20 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                           />
                         ))}
                       </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
 
                 <Button
                   size="icon"
                   onClick={handleSendMessage}
                   disabled={(!message.trim() && attachedFiles.length === 0) || isStreaming || isGenerating}
-                  className="h-10 w-10 btn-t3-primary text-white rounded-full shadow-lg disabled:opacity-50 
-                           disabled:cursor-not-allowed transition-all duration-200"
+                  className={cn(
+                    "h-10 w-10 btn-t3-primary text-white rounded-full shadow-lg",
+                    "disabled:opacity-50 disabled:cursor-not-allowed",
+                    "transition-all duration-200",
+                    "hover:scale-105 active:scale-95"
+                  )}
                 >
                   {isStreaming || isGenerating ? (
                     <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
