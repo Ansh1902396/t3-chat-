@@ -49,8 +49,23 @@ const aiConfigSchema = z.object({
 
 const chatRequestSchema = z.object({
   messages: z.array(messageSchema).min(1),
-  config: aiConfigSchema,
+  config: aiConfigSchema.extend({
+    webSearch: z.object({
+      enabled: z.boolean(),
+      searchContextSize: z.enum(['low', 'medium', 'high']).optional(),
+      userLocation: z.object({
+        type: z.literal('approximate'),
+        city: z.string().optional(),
+        region: z.string().optional(),
+        country: z.string().optional(),
+      }).optional(),
+    }).optional(),
+  }),
   conversationId: z.string().optional(),
+  toolChoice: z.object({
+    type: z.literal('tool'),
+    toolName: z.literal('web_search_preview'),
+  }).optional(),
 });
 
 // Add image generation schema
@@ -219,6 +234,17 @@ export const aiChatRouter = createTRPCRouter({
           });
         }
 
+        // Validate web search capability if enabled
+        if (input.config.webSearch?.enabled) {
+          const modelInfo = aiModelManager.getAvailableModels(input.config.provider)[input.config.model];
+          if (!modelInfo?.capabilities?.webSearch) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Model ${input.config.model} does not support web search`,
+            });
+          }
+        }
+
         // Add system prompt for proper formatting
         const systemPrompt = {
           role: "system" as const,
@@ -237,7 +263,9 @@ Always include the language identifier after the opening triple backticks for pr
 
 For inline code, use single backticks: \`variableName\` or \`functionName()\`.
 
-Format your responses with proper markdown structure including headers, lists, and code blocks as appropriate.`
+Format your responses with proper markdown structure including headers, lists, and code blocks as appropriate.
+
+When using web search, always cite your sources using markdown links: [source title](url).`
         };
 
         // Prepend system prompt if not already present
@@ -245,66 +273,22 @@ Format your responses with proper markdown structure including headers, lists, a
           ? input.messages 
           : [systemPrompt, ...input.messages];
 
-        // Define fallback providers in order of preference
-        const fallbackProviders: Array<{ provider: AIProvider; model: string }> = [
-          { provider: input.config.provider, model: input.config.model }, // Original choice
-          { provider: "google", model: "gemini-1.5-flash" }, // Fast and reliable fallback
-          { provider: "anthropic", model: "claude-3-5-haiku-20241022" }, // Alternative fallback
-        ];
-
-        // Remove duplicates and invalid providers
-        const validFallbacks = fallbackProviders.filter((fallback, index, arr) => {
-          const isUnique = arr.findIndex(f => f.provider === fallback.provider && f.model === fallback.model) === index;
-          return isUnique && aiModelManager.getAvailableProviders().includes(fallback.provider);
+        // Generate response
+        const response = await aiModelManager.generateResponse({
+          messages: messages as CoreMessage[],
+          config: input.config as AIModelConfig,
+          toolChoice: input.toolChoice,
         });
 
-        let lastError: Error | null = null;
-
-        // Try each provider in sequence
-        for (const fallback of validFallbacks) {
-          try {
-            const config = {
-              ...input.config,
-              provider: fallback.provider,
-              model: fallback.model,
-            };
-
-            // Generate response
-            const response = await aiModelManager.generateResponse({
-              messages: messages as CoreMessage[],
-              config: config as AIModelConfig,
-            });
-
-            return {
-              content: response.content,
-              usage: response.usage,
-              finishReason: response.finishReason,
-              success: true,
-              provider: fallback.provider, // Include which provider was actually used
-              model: fallback.model,
-            };
-          } catch (error) {
-            console.error(`Failed with provider ${fallback.provider}:`, error);
-            lastError = error as Error;
-            
-            // If it's a quota/rate limit error, try the next provider immediately
-            if (error instanceof Error && (
-              error.message.includes('quota') || 
-              error.message.includes('rate limit') ||
-              error.message.includes('429')
-            )) {
-              continue;
-            }
-            
-            // For other errors, also try the next provider but log it differently
-            console.log(`Trying next provider due to error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-            continue;
-          }
-        }
-
-        // If all providers failed, throw the last error
-        throw lastError || new Error('All providers failed');
-
+        return {
+          content: response.content,
+          usage: response.usage,
+          finishReason: response.finishReason,
+          sources: response.sources,
+          success: true,
+          provider: input.config.provider,
+          model: input.config.model,
+        };
       } catch (error) {
         console.error("Error generating AI response:", error);
         

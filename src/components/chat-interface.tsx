@@ -54,6 +54,17 @@ interface ChatInterfaceProps {
   onLogout: () => void
 }
 
+interface SearchConfig {
+  enabled: boolean;
+  searchContextSize: 'low' | 'medium' | 'high';
+  userLocation?: {
+    type: 'approximate';
+    city?: string;
+    region?: string;
+    country?: string;
+  };
+}
+
 const categoryButtons = [
   {
     icon: Sparkles,
@@ -88,6 +99,48 @@ const sampleQuestions = [
   "What is the meaning of life?",
 ]
 
+// Add this helper for tooltip
+function Tooltip({ children, text }: { children: React.ReactNode; text: string }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div
+      className="relative inline-block"
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+    >
+      {children}
+      {show && (
+        <div className="absolute z-50 left-1/2 -translate-x-1/2 mt-2 px-3 py-1 rounded bg-black text-white text-xs shadow-lg whitespace-nowrap pointer-events-none animate-fade-in">
+          {text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Add this helper for source tooltip
+function SourceTooltip({ source }: { source: { title: string; url: string; content?: string } }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div
+      className="relative inline-block ml-2"
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+    >
+      <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-primary border border-primary/30 cursor-pointer">
+        <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="9" stroke="currentColor" strokeWidth="2"/><text x="10" y="15" textAnchor="middle" fontSize="12" fill="currentColor">i</text></svg>
+      </span>
+      {show && (
+        <div className="absolute z-50 left-1/2 -translate-x-1/2 mt-2 px-4 py-2 rounded bg-black text-white text-xs shadow-lg whitespace-pre-line pointer-events-none animate-fade-in min-w-[200px] max-w-xs">
+          <div className="font-semibold mb-1">{source.title}</div>
+          <a href={source.url} target="_blank" rel="noopener noreferrer" className="underline break-all text-blue-200">{source.url}</a>
+          {source.content && <div className="mt-2 text-xs text-gray-200">{source.content}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -120,6 +173,12 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
   const scrollTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined)
   const [showImageGen, setShowImageGen] = useState(false)
   const [showImageGenDialogOpen, setShowImageGenDialogOpen] = useState(false)
+  const [showSearchDialog, setShowSearchDialog] = useState(false)
+  const [searchConfig, setSearchConfig] = useState<SearchConfig>({
+    enabled: true,
+    searchContextSize: 'medium',
+  })
+  const [isSearchMode, setIsSearchMode] = useState(false)
 
   // Initialize AI Chat hook
   const {
@@ -267,15 +326,13 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
 
   const handleSendMessage = () => {
     if ((!message.trim() && attachedFiles.length === 0) || isStreaming || isGenerating) return
-    
     const config: ChatConfig = {
       provider: getProviderFromModel(selectedModel),
       model: selectedModel,
       maxTokens: 2000,
       temperature: 0.7,
+      webSearch: isSearchMode ? { enabled: true } : undefined,
     }
-    
-    // Include attachments in the message
     const messageWithAttachments = {
       content: message,
       attachments: attachedFiles.map(file => ({
@@ -288,11 +345,11 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
         url: file.url,
       }))
     }
-    
     sendMessageStream(message, config, messageWithAttachments.attachments)
     setMessage("")
     setAttachedFiles([])
     setShowFileUpload(false)
+    setIsSearchMode(false)
   }
 
   // Handle message input
@@ -302,7 +359,6 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
       if (message.trim().startsWith("/image")) {
         const prompt = message.trim().slice(6).trim();
         if (prompt) {
-          // Use default config for image generation
           const config: ImageGenerationConfig = {
             provider: "openai",
             model: "dall-e-3",
@@ -316,6 +372,7 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
         }
       } else {
         handleSendMessage();
+        setIsSearchMode(false);
       }
     }
   };
@@ -437,6 +494,15 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
     setSelectedMessage(message)
     setIsDialogOpen(true)
   }
+
+  const handleSearchClick = () => {
+    const modelInfo = availableModels?.models[getProviderFromModel(selectedModel)]?.[selectedModel];
+    if (!modelInfo?.capabilities?.webSearch) {
+      // Optionally show a toast or alert
+      return;
+    }
+    setIsSearchMode((prev) => !prev);
+  };
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
@@ -673,6 +739,33 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                           <User className="h-4 w-4 text-white" />
                         </div>
                       )}
+                      {msg.role === "assistant" && msg.sources && msg.sources.length > 0 && (
+                        isSearchMode ? (
+                          <div className="flex items-center gap-2 mt-2">
+                            <span className="text-xs text-muted-foreground">Sources:</span>
+                            {msg.sources.map((source, idx) => (
+                              <SourceTooltip key={idx} source={source} />
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="mt-4 pt-4 border-t border-border/40">
+                            <div className="text-sm font-medium text-muted-foreground mb-2">Sources:</div>
+                            <div className="space-y-2">
+                              {msg.sources.map((source, index) => (
+                                <a
+                                  key={index}
+                                  href={source.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="block text-sm text-primary hover:underline"
+                                >
+                                  {source.title}
+                                </a>
+                              ))}
+                            </div>
+                          </div>
+                        )
+                      )}
                     </div>
                   ))}
 
@@ -806,13 +899,22 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                   <ImageIcon className="h-4 w-4" />
                 </Button>
 
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-10 w-10 text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-all rounded-full"
-                >
-                  <Search className="h-4 w-4" />
-                </Button>
+                <Tooltip text={isSearchMode ? "Web search enabled for next message" : "Enable web search for next message"}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={cn(
+                      "h-10 w-10 text-muted-foreground hover:text-foreground transition-all rounded-full",
+                      isSearchMode
+                        ? "ring-2 ring-primary ring-offset-2 bg-primary/10 text-primary animate-pulse shadow-[0_0_16px_4px_rgba(99,102,241,0.5)]"
+                        : "hover:bg-muted/40"
+                    )}
+                    onClick={handleSearchClick}
+                    title={isSearchMode ? "Web search enabled for next message" : "Enable web search for next message"}
+                  >
+                    <Search className="h-4 w-4" />
+                  </Button>
+                </Tooltip>
 
                 <Button
                   variant="ghost"

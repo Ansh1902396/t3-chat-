@@ -20,6 +20,11 @@ export interface Message {
   content: string;
   timestamp: Date;
   attachments?: MessageAttachment[];
+  sources?: Array<{
+    title: string;
+    url: string;
+    content?: string;
+  }>;
 }
 
 export interface ChatConfig {
@@ -31,6 +36,16 @@ export interface ChatConfig {
   topK?: number;
   presencePenalty?: number;
   frequencyPenalty?: number;
+  webSearch?: {
+    enabled: boolean;
+    searchContextSize?: 'low' | 'medium' | 'high';
+    userLocation?: {
+      type: 'approximate';
+      city?: string;
+      region?: string;
+      country?: string;
+    };
+  };
 }
 
 export interface ImageGenerationConfig extends ChatConfig {
@@ -53,6 +68,8 @@ export interface UseAIChatOptions {
   conversationId?: string; // For loading existing conversations
   onImageGenerationStart?: () => void;
   onImageGenerationEnd?: () => void;
+  onWebSearchStart?: () => void;
+  onWebSearchEnd?: () => void;
 }
 
 export function useAIChat(options: UseAIChatOptions = {}) {
@@ -64,6 +81,8 @@ export function useAIChat(options: UseAIChatOptions = {}) {
   const abortControllerRef = useRef<AbortController | null>(null);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
+  const [isWebSearching, setIsWebSearching] = useState(false);
+  const [searchSources, setSearchSources] = useState<Array<{ title: string; url: string; content?: string }>>([]);
 
   // Get available models
   const { data: availableModels, isLoading: modelsLoading } = 
@@ -160,6 +179,13 @@ export function useAIChat(options: UseAIChatOptions = {}) {
       // Add user message
       const userMessage = addMessage("user", content, attachments);
 
+      // Check if web search is enabled
+      if (config.webSearch?.enabled) {
+        setIsWebSearching(true);
+        setSearchSources([]);
+        options.onWebSearchStart?.();
+      }
+
       // Prepare messages array with formatting system prompt
       const defaultSystemPrompt = `You are a helpful AI assistant. When providing code examples, always format them properly using markdown code blocks with language specification.
 
@@ -188,21 +214,36 @@ Format your responses with proper markdown structure including headers, lists, a
       const response = await generateResponse.mutateAsync({
         messages: messagesForAPI,
         config,
+        toolChoice: config.webSearch?.enabled ? { type: 'tool', toolName: 'web_search_preview' } : undefined,
       });
 
       // Add assistant response
       const assistantMessage = addMessage("assistant", response.content);
 
+      // Update search sources if available
+      if (response.sources) {
+        setSearchSources(response.sources);
+      }
+
       // Auto-save conversation
       const finalMessages = [...messages, userMessage, assistantMessage];
       await autoSaveConversation(finalMessages, config);
 
+      if (config.webSearch?.enabled) {
+        setIsWebSearching(false);
+        options.onWebSearchEnd?.();
+      }
+
       return response;
     } catch (error) {
+      if (config.webSearch?.enabled) {
+        setIsWebSearching(false);
+        options.onWebSearchEnd?.();
+      }
       options.onError?.(error as Error);
       throw error;
     }
-  }, [messages, addMessage, generateResponse, autoSaveConversation, options.onError]);
+  }, [messages, addMessage, generateResponse, autoSaveConversation, options]);
 
   // Send message with streaming response
   const sendMessageStream = useCallback(async (
@@ -213,6 +254,13 @@ Format your responses with proper markdown structure including headers, lists, a
     try {
       // Add user message
       const userMessage = addMessage("user", content, attachments);
+
+      // Check if web search is enabled
+      if (config.webSearch?.enabled) {
+        setIsWebSearching(true);
+        setSearchSources([]);
+        options.onWebSearchStart?.();
+      }
 
       // Prepare messages array with formatting system prompt
       const defaultSystemPrompt = `You are a helpful AI assistant. When providing code examples, always format them properly using markdown code blocks with language specification.
@@ -249,6 +297,7 @@ Format your responses with proper markdown structure including headers, lists, a
       const response = await generateResponse.mutateAsync({
         messages: messagesForAPI,
         config,
+        toolChoice: config.webSearch?.enabled ? { type: 'tool', toolName: 'web_search_preview' } : undefined,
       });
 
       // Simulate streaming by gradually revealing the content
@@ -304,9 +353,23 @@ Format your responses with proper markdown structure including headers, lists, a
       setCurrentStreamContent("");
       options.onStreamEnd?.();
 
+      // Update search sources if available in the final response
+      if (response.sources) {
+        setSearchSources(response.sources);
+      }
+
+      if (config.webSearch?.enabled) {
+        setIsWebSearching(false);
+        options.onWebSearchEnd?.();
+      }
+
     } catch (error) {
       setIsStreaming(false);
       setCurrentStreamContent("");
+      if (config.webSearch?.enabled) {
+        setIsWebSearching(false);
+        options.onWebSearchEnd?.();
+      }
       options.onError?.(error as Error);
     } finally {
       abortControllerRef.current = null;
@@ -453,6 +516,8 @@ Format your responses with proper markdown structure including headers, lists, a
     conversationTitle,
     isGeneratingImage,
     generatedImages,
+    isWebSearching,
+    searchSources,
 
     // Actions
     sendMessage,

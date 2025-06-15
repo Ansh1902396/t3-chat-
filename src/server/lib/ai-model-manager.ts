@@ -1,7 +1,20 @@
 import { openai } from '@ai-sdk/openai';
 import { anthropic } from '@ai-sdk/anthropic';
 import { google } from '@ai-sdk/google';
-import { generateText, streamText, type CoreMessage, type Message, type CoreSystemMessage, type CoreUserMessage, type CoreAssistantMessage, type TextPart, type ImagePart, type FilePart , experimental_generateImage as generateImage  } from 'ai';
+import { 
+  generateText, 
+  streamText, 
+  type CoreMessage, 
+  type Message, 
+  type CoreSystemMessage, 
+  type CoreUserMessage, 
+  type CoreAssistantMessage, 
+  type TextPart, 
+  type ImagePart, 
+  type FilePart,
+  type LanguageModelV1,
+  experimental_generateImage as generateImage 
+} from 'ai';
 
 import { env } from '~/env';
 
@@ -19,6 +32,9 @@ type ModelInfo = {
   name: string;
   description: string;
   type?: 'text' | 'image';
+  capabilities?: {
+    webSearch?: boolean;
+  };
 };
 
 // Define model types for each provider
@@ -54,10 +70,30 @@ type ModelConfig = {
 // Available models for each provider
 export const AI_MODELS: ModelConfig = {
   [AI_PROVIDERS.OPENAI]: {
-    'gpt-4o': { name: 'GPT-4o', description: 'Most capable GPT-4 model', type: 'text' },
-    'gpt-4o-mini': { name: 'GPT-4o Mini', description: 'Faster, cost-effective GPT-4', type: 'text' },
-    'gpt-4-turbo': { name: 'GPT-4 Turbo', description: 'High-performance GPT-4', type: 'text' },
-    'gpt-3.5-turbo': { name: 'GPT-3.5 Turbo', description: 'Fast and efficient', type: 'text' },
+    'gpt-4o': { 
+      name: 'GPT-4o', 
+      description: 'Most capable GPT-4 model', 
+      type: 'text',
+      capabilities: { webSearch: true }
+    },
+    'gpt-4o-mini': { 
+      name: 'GPT-4o Mini', 
+      description: 'Faster, cost-effective GPT-4', 
+      type: 'text',
+      capabilities: { webSearch: true }
+    },
+    'gpt-4-turbo': { 
+      name: 'GPT-4 Turbo', 
+      description: 'High-performance GPT-4', 
+      type: 'text',
+      capabilities: { webSearch: true }
+    },
+    'gpt-3.5-turbo': { 
+      name: 'GPT-3.5 Turbo', 
+      description: 'Fast and efficient', 
+      type: 'text',
+      capabilities: { webSearch: false }
+    },
     'dall-e-3': { name: 'DALL-E 3', description: 'High-quality image generation', type: 'image' },
     'dall-e-2': { name: 'DALL-E 2', description: 'Fast image generation', type: 'image' },
   } as const,
@@ -89,6 +125,16 @@ export interface AIModelConfig {
   topK?: number;
   presencePenalty?: number;
   frequencyPenalty?: number;
+  webSearch?: {
+    enabled: boolean;
+    searchContextSize?: 'low' | 'medium' | 'high';
+    userLocation?: {
+      type: 'approximate';
+      city?: string;
+      region?: string;
+      country?: string;
+    };
+  };
 }
 
 // Chat request interface
@@ -96,6 +142,10 @@ export interface ChatRequest {
   messages: CoreMessage[];
   config: AIModelConfig;
   stream?: boolean;
+  toolChoice?: {
+    type: 'tool';
+    toolName: 'web_search_preview';
+  };
 }
 
 // Response interface
@@ -107,6 +157,15 @@ export interface ChatResponse {
     totalTokens: number;
   };
   finishReason?: string;
+}
+
+// Add web search response interface
+export interface WebSearchResponse extends ChatResponse {
+  sources?: Array<{
+    title: string;
+    url: string;
+    content?: string;
+  }>;
 }
 
 // Image generation request interface
@@ -199,12 +258,20 @@ export class AIModelManager {
     return `${provider}:${model}`;
   }
 
-  public async generateResponse(request: ChatRequest): Promise<ChatResponse> {
-    const { messages, config } = request;
-    const { provider, model, ...params } = config;
+  public async generateResponse(request: ChatRequest): Promise<WebSearchResponse> {
+    const { messages, config, toolChoice } = request;
+    const { provider, model, webSearch, ...params } = config;
 
     const client = this.getProviderClient(provider);
     const modelId = this.buildModelIdentifier(provider, model);
+
+    // Validate web search capability
+    if (webSearch?.enabled) {
+      const modelInfo = this.getAvailableModels(provider)[model];
+      if (!modelInfo?.capabilities?.webSearch) {
+        throw new Error(`Model ${model} does not support web search`);
+      }
+    }
 
     let attempts = 0;
     const maxAttempts = 3;
@@ -212,7 +279,7 @@ export class AIModelManager {
 
     while (attempts < maxAttempts) {
       try {
-        const result = await generateText({
+        const generateOptions: any = {
           model: client(model),
           messages: messages,
           maxTokens: params.maxTokens ?? 1000,
@@ -221,7 +288,24 @@ export class AIModelManager {
           topK: params.topK,
           presencePenalty: params.presencePenalty,
           frequencyPenalty: params.frequencyPenalty,
-        });
+        };
+
+        // Add web search tools if enabled
+        if (webSearch?.enabled && provider === AI_PROVIDERS.OPENAI) {
+          generateOptions.tools = {
+            web_search_preview: client.tools.webSearchPreview({
+              searchContextSize: webSearch.searchContextSize ?? 'medium',
+              userLocation: webSearch.userLocation,
+            }),
+          };
+
+          // Force web search if toolChoice is specified
+          if (toolChoice) {
+            generateOptions.toolChoice = toolChoice;
+          }
+        }
+
+        const result = await generateText(generateOptions);
 
         return {
           content: result.text,
@@ -231,6 +315,13 @@ export class AIModelManager {
             totalTokens: result.usage.totalTokens,
           } : undefined,
           finishReason: result.finishReason,
+          sources: result.sources
+            ?.filter(source => typeof source.title === 'string' && typeof source.url === 'string')
+            .map(source => ({
+              title: source.title as string,
+              url: source.url as string,
+              content: (source as any).content,
+            })),
         };
       } catch (error: unknown) {
         attempts++;
