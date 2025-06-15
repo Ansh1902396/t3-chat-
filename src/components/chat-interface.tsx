@@ -8,16 +8,37 @@ import { Input } from "~/components/ui/input"
 import { Sidebar } from "./sidebar"
 import { ModelDropdown } from "./model-dropdown"
 import { ThemeToggle } from "./theme-toggle"
-import { Menu, Sparkles, Search, Code, GraduationCap, Paperclip, ArrowUp, User, Bot, X, MoreVertical, Copy, Trash2, Edit2 } from "lucide-react"
+import { Menu, Sparkles, Search, Code, GraduationCap, Paperclip, ArrowUp, User, Bot, X, MoreVertical, Copy, Trash2, Edit2, Wand2, Image as ImageIcon } from "lucide-react"
 import { MarkdownRenderer } from "./ui/markdown-renderer"
 import { StreamingMarkdown } from "./ui/streaming-markdown"
 import { FileUpload } from "./ui/file-upload"
 import { FileAttachmentList } from "./ui/file-attachment"
-import { useAIChat, type ChatConfig, type Message } from "~/hooks/useAIChat"
+import { useAIChat, type ChatConfig, type Message, type ImageGenerationConfig } from "~/hooks/useAIChat"
 import { cn } from "~/lib/utils"
 import { useInView } from "react-intersection-observer"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "~/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "~/components/ui/dialog"
 import { ScrollArea } from "~/components/ui/scroll-area"
+import { Label } from "~/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select"
+import { Switch } from "~/components/ui/switch"
+import { Slider } from "~/components/ui/slider"
+import { type AIProvider } from "~/server/api/routers/ai-chat"
+import { GeneratedImage } from "./ui/generated-image"
+
+// Client-side constants and types
+type ClientAIProvider = "openai" | "google" | "anthropic";
+
+const AI_PROVIDERS: Record<ClientAIProvider, ClientAIProvider> = {
+  openai: "openai",
+  google: "google",
+  anthropic: "anthropic",
+} as const;
+
+type ModelInfo = {
+  name: string;
+  description: string;
+  type?: 'text' | 'image';
+};
 
 interface User {
   id: string
@@ -31,6 +52,17 @@ interface User {
 interface ChatInterfaceProps {
   user: User | null
   onLogout: () => void
+}
+
+interface SearchConfig {
+  enabled: boolean;
+  searchContextSize: 'low' | 'medium' | 'high';
+  userLocation?: {
+    type: 'approximate';
+    city?: string;
+    region?: string;
+    country?: string;
+  };
 }
 
 const categoryButtons = [
@@ -67,6 +99,48 @@ const sampleQuestions = [
   "What is the meaning of life?",
 ]
 
+// Add this helper for tooltip
+function Tooltip({ children, text }: { children: React.ReactNode; text: string }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div
+      className="relative inline-block"
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+    >
+      {children}
+      {show && (
+        <div className="absolute z-50 left-1/2 -translate-x-1/2 mt-2 px-3 py-1 rounded bg-black text-white text-xs shadow-lg whitespace-nowrap pointer-events-none animate-fade-in">
+          {text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Add this helper for source tooltip
+function SourceTooltip({ source }: { source: { title: string; url: string; content?: string } }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div
+      className="relative inline-block ml-2"
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+    >
+      <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-primary border border-primary/30 cursor-pointer">
+        <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="9" stroke="currentColor" strokeWidth="2"/><text x="10" y="15" textAnchor="middle" fontSize="12" fill="currentColor">i</text></svg>
+      </span>
+      {show && (
+        <div className="absolute z-50 left-1/2 -translate-x-1/2 mt-2 px-4 py-2 rounded bg-black text-white text-xs shadow-lg whitespace-pre-line pointer-events-none animate-fade-in min-w-[200px] max-w-xs">
+          <div className="font-semibold mb-1">{source.title}</div>
+          <a href={source.url} target="_blank" rel="noopener noreferrer" className="underline break-all text-blue-200">{source.url}</a>
+          {source.content && <div className="mt-2 text-xs text-gray-200">{source.content}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -96,7 +170,15 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
   })
   const [selectedMessage, setSelectedMessage] = useState<Message | null>(null)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
-  const scrollTimeoutRef = useRef<NodeJS.Timeout>()
+  const scrollTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined)
+  const [showImageGen, setShowImageGen] = useState(false)
+  const [showImageGenDialogOpen, setShowImageGenDialogOpen] = useState(false)
+  const [showSearchDialog, setShowSearchDialog] = useState(false)
+  const [searchConfig, setSearchConfig] = useState<SearchConfig>({
+    enabled: true,
+    searchContextSize: 'medium',
+  })
+  const [isSearchMode, setIsSearchMode] = useState(false)
 
   // Initialize AI Chat hook
   const {
@@ -104,9 +186,12 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
     isStreaming,
     currentStreamContent,
     isGenerating,
+    isGeneratingImage,
+    generatedImages,
     availableModels,
     modelsLoading,
     sendMessageStream,
+    generateImageResponse,
     clearChat,
     startNewConversation,
     loadConversation,
@@ -126,27 +211,6 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
       setCurrentConversationId(hookConversationId)
     }
   }, [hookConversationId])
-
-  // Transform availableModels data structure for the dropdown
-  const transformedAvailableModels = availableModels ? 
-    Object.entries(availableModels.models).flatMap(([provider, models]) =>
-      Object.entries(models).map(([modelId, modelData]) => ({
-        id: modelId,
-        name: modelData.name,
-        provider: provider,
-        available: true // All models returned from API are available
-      }))
-    ) : undefined
-
-  // Auto-select first available model if current selection is not available
-  useEffect(() => {
-    if (transformedAvailableModels && transformedAvailableModels.length > 0) {
-      const currentModelExists = transformedAvailableModels.some(model => model.id === selectedModel)
-      if (!currentModelExists) {
-        setSelectedModel(transformedAvailableModels[0]!.id)
-      }
-    }
-  }, [transformedAvailableModels, selectedModel])
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -262,15 +326,13 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
 
   const handleSendMessage = () => {
     if ((!message.trim() && attachedFiles.length === 0) || isStreaming || isGenerating) return
-    
     const config: ChatConfig = {
       provider: getProviderFromModel(selectedModel),
       model: selectedModel,
       maxTokens: 2000,
       temperature: 0.7,
+      webSearch: isSearchMode ? { enabled: true } : undefined,
     }
-    
-    // Include attachments in the message
     const messageWithAttachments = {
       content: message,
       attachments: attachedFiles.map(file => ({
@@ -283,19 +345,37 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
         url: file.url,
       }))
     }
-    
     sendMessageStream(message, config, messageWithAttachments.attachments)
     setMessage("")
     setAttachedFiles([])
     setShowFileUpload(false)
+    setIsSearchMode(false)
   }
 
+  // Handle message input
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault()
-      handleSendMessage()
+      e.preventDefault();
+      if (message.trim().startsWith("/image")) {
+        const prompt = message.trim().slice(6).trim();
+        if (prompt) {
+          const config: ImageGenerationConfig = {
+            provider: "openai",
+            model: "dall-e-3",
+            size: "1024x1024",
+            quality: "standard",
+            style: "natural",
+            n: 1,
+          };
+          generateImageResponse(prompt, config);
+          setMessage("");
+        }
+      } else {
+        handleSendMessage();
+        setIsSearchMode(false);
+      }
     }
-  }
+  };
 
   const handleSampleQuestionClick = (question: string) => {
     setMessage(question)
@@ -342,14 +422,46 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
     window.open(file.url, '_blank');
   };
 
-  // Helper function to determine provider from model name
-  const getProviderFromModel = (modelId: string) => {
-    if (modelId.includes("gemini")) return "google" as const
-    if (modelId.includes("gpt") || modelId.includes("o4")) return "openai" as const
-    if (modelId.includes("claude")) return "anthropic" as const
-    if (modelId.includes("deepseek")) return "openai" as const // assuming OpenAI compatible
-    return "google" as const // default
+  // Get provider from model ID
+  const getProviderFromModel = (modelId: string): ClientAIProvider => {
+    // Check available models first
+    if (availableModels?.models) {
+      for (const [provider, models] of Object.entries(availableModels.models)) {
+        if (modelId in models) {
+          // Special handling for DALL-E models
+          if (modelId.includes("dall-e")) {
+            return "openai";
+          }
+          // Special handling for Gemini Pro Vision
+          if (modelId === "gemini-pro-vision") {
+            return "google";
+          }
+          return provider as ClientAIProvider;
+        }
+      }
+    }
+
+    // Fallback to provider mapping
+    const providerMap: Record<string, ClientAIProvider> = {
+      "dall-e-3": "openai",
+      "dall-e-2": "openai",
+      "gemini-pro-vision": "google",
+    };
+
+    return providerMap[modelId] ?? "openai";
   }
+
+  // Transform availableModels for the dropdown
+  const transformedAvailableModels = availableModels ? 
+    Object.entries(availableModels.models).flatMap(([provider, models]) =>
+      Object.entries(models).map(([modelId, modelData]) => ({
+        id: modelId,
+        name: modelData.name,
+        provider,
+        available: true,
+        type: (modelData as ModelInfo).type
+      }))
+    ) : [];
 
   // Handle conversation selection from sidebar
   const handleConversationSelect = (conversationId: string) => {
@@ -382,6 +494,15 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
     setSelectedMessage(message)
     setIsDialogOpen(true)
   }
+
+  const handleSearchClick = () => {
+    const modelInfo = availableModels?.models[getProviderFromModel(selectedModel)]?.[selectedModel];
+    if (!modelInfo?.capabilities?.webSearch) {
+      // Optionally show a toast or alert
+      return;
+    }
+    setIsSearchMode((prev) => !prev);
+  };
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
@@ -519,9 +640,10 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                       key={msg.id}
                       className={cn(
                         "group relative flex gap-4 message-container animate-fade-in",
-                        msg.role === "user" ? "justify-end" : "justify-start"
+                        msg.role === "user" ? "justify-end" : "justify-start",
+                        "py-2"
                       )}
-                      style={{ 
+                      style={{
                         animationDuration: "0.3s",
                         animationFillMode: "both"
                       }}
@@ -531,23 +653,48 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                           <Bot className="h-4 w-4 text-primary" />
                         </div>
                       )}
-                      
                       <Dialog open={isDialogOpen && selectedMessage?.id === msg.id} onOpenChange={(open) => {
                         setIsDialogOpen(open)
                         if (!open) setSelectedMessage(null)
                       }}>
-                        <div className="relative group/message">
+                        <div className="relative group/message flex flex-col max-w-[70%]">
                           <div
                             className={cn(
-                              "max-w-[80%] text-sm transition-all duration-200",
+                              "text-sm transition-all duration-200 shadow-md",
                               msg.role === "user"
-                                ? "bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 ml-auto px-4 py-3 rounded-2xl shadow-sm hover:shadow-md backdrop-blur-sm"
-                                : "ml-12" // Add margin for assistant messages to align with avatar
+                                ? "bg-primary text-white ml-auto px-5 py-3 rounded-2xl rounded-br-md border border-primary/30"
+                                : "bg-muted/60 dark:bg-muted/30 text-foreground ml-12 px-5 py-3 rounded-2xl rounded-bl-md border border-border/40",
+                              "backdrop-blur-sm"
                             )}
                           >
                             {msg.role === "assistant" ? (
-                              <div className="prose prose-sm dark:prose-invert max-w-none">
-                                <MarkdownRenderer>{msg.content}</MarkdownRenderer>
+                              <div className="prose prose-sm dark:prose-invert max-w-none text-foreground">
+                                {msg.content.startsWith("Generated images for prompt:") ? (
+                                  <div className="space-y-2 text-center">
+                                    {(() => {
+                                      const parts = msg.content.split("\n\n");
+                                      const prompt = msg.content.match(/Generated images for prompt: "([^"]+)"/)?.[1] || "";
+                                      const urls = parts[1]?.split("\n").filter(Boolean) || [];
+                                      return (
+                                        <>
+                                          <div className="text-base font-semibold mb-2 text-primary">{prompt}</div>
+                                          <div className="flex flex-col items-center gap-4">
+                                            {urls.map((url, index) => (
+                                              <GeneratedImage
+                                                key={index}
+                                                url={url}
+                                                prompt={prompt}
+                                                className="w-full max-w-xs rounded-xl border border-border shadow"
+                                              />
+                                            ))}
+                                          </div>
+                                        </>
+                                      );
+                                    })()}
+                                  </div>
+                                ) : (
+                                  <MarkdownRenderer>{msg.content}</MarkdownRenderer>
+                                )}
                                 <div className="flex items-center justify-between mt-2">
                                   <div className="text-xs text-muted-foreground">
                                     {msg.timestamp.toLocaleTimeString()}
@@ -565,77 +712,59 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                                 </div>
                               </div>
                             ) : (
-                              <>
-                                <div className="whitespace-pre-wrap text-black dark:text-white/90">{msg.content}</div>
-                                <div className="flex items-center justify-between mt-2 pt-2 border-t border-black/10 dark:border-white/10">
-                                  <div className="text-xs text-black/60 dark:text-white/60">
+                              <div className="flex flex-col">
+                                <div className="whitespace-pre-wrap text-white font-medium">{msg.content}</div>
+                                <div className="flex items-center justify-between mt-2 pt-2 border-t border-primary/30">
+                                  <div className="text-xs text-white/70">
                                     {msg.timestamp.toLocaleTimeString()}
                                   </div>
                                   <DialogTrigger asChild>
                                     <Button
                                       variant="ghost"
                                       size="icon"
-                                      className="h-6 w-6 opacity-0 group-hover/message:opacity-100 transition-opacity text-black/60 dark:text-white/60 hover:bg-black/5 dark:hover:bg-white/5"
+                                      className="h-6 w-6 opacity-0 group-hover/message:opacity-100 transition-opacity text-white/70 hover:bg-primary/20"
                                       onClick={() => setSelectedMessage(msg)}
                                     >
                                       <MoreVertical className="h-3 w-3" />
                                     </Button>
                                   </DialogTrigger>
                                 </div>
-                              </>
+                              </div>
                             )}
                           </div>
                         </div>
-
-                        <DialogContent className="sm:max-w-[600px]">
-                          <DialogHeader>
-                            <DialogTitle>Message Options</DialogTitle>
-                          </DialogHeader>
-                          <div className="grid gap-4 py-4">
-                            <ScrollArea className="max-h-[300px] rounded-lg border p-4">
-                              <div className="whitespace-pre-wrap text-sm">
-                                {msg.content}
-                              </div>
-                            </ScrollArea>
-                            <div className="flex justify-end gap-2">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleCopyMessage(msg.content)}
-                                className="gap-2"
-                              >
-                                <Copy className="h-4 w-4" />
-                                Copy
-                              </Button>
-                              {msg.role === "user" && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => handleEditMessage(msg)}
-                                  className="gap-2"
+                      </Dialog>
+                      {msg.role === "user" && (
+                        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-primary/30 to-primary/60 flex items-center justify-center shadow-sm ml-2">
+                          <User className="h-4 w-4 text-white" />
+                        </div>
+                      )}
+                      {msg.role === "assistant" && msg.sources && msg.sources.length > 0 && (
+                        isSearchMode ? (
+                          <div className="flex items-center gap-2 mt-2">
+                            <span className="text-xs text-muted-foreground">Sources:</span>
+                            {msg.sources.map((source, idx) => (
+                              <SourceTooltip key={idx} source={source} />
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="mt-4 pt-4 border-t border-border/40">
+                            <div className="text-sm font-medium text-muted-foreground mb-2">Sources:</div>
+                            <div className="space-y-2">
+                              {msg.sources.map((source, index) => (
+                                <a
+                                  key={index}
+                                  href={source.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="block text-sm text-primary hover:underline"
                                 >
-                                  <Edit2 className="h-4 w-4" />
-                                  Edit
-                                </Button>
-                              )}
-                              <Button
-                                variant="destructive"
-                                size="sm"
-                                onClick={() => handleDeleteMessage(msg.id)}
-                                className="gap-2"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                                Delete
-                              </Button>
+                                  {source.title}
+                                </a>
+                              ))}
                             </div>
                           </div>
-                        </DialogContent>
-                      </Dialog>
-
-                      {msg.role === "user" && (
-                        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-muted/40 to-muted/60 flex items-center justify-center shadow-sm">
-                          <User className="h-4 w-4" />
-                        </div>
+                        )
                       )}
                     </div>
                   ))}
@@ -760,9 +889,32 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                   variant="ghost"
                   size="icon"
                   className="h-10 w-10 text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-all rounded-full"
+                  onClick={() => {
+                    setMessage("/image ")
+                    // Focus the input after setting the command
+                    setTimeout(() => inputRef.current?.focus(), 0)
+                  }}
+                  title="Generate Image (Type /image followed by your prompt)"
                 >
-                  <Search className="h-4 w-4" />
+                  <ImageIcon className="h-4 w-4" />
                 </Button>
+
+                <Tooltip text={isSearchMode ? "Web search enabled for next message" : "Enable web search for next message"}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={cn(
+                      "h-10 w-10 text-muted-foreground hover:text-foreground transition-all rounded-full",
+                      isSearchMode
+                        ? "ring-2 ring-primary ring-offset-2 bg-primary/10 text-primary animate-pulse shadow-[0_0_16px_4px_rgba(99,102,241,0.5)]"
+                        : "hover:bg-muted/40"
+                    )}
+                    onClick={handleSearchClick}
+                    title={isSearchMode ? "Web search enabled for next message" : "Enable web search for next message"}
+                  >
+                    <Search className="h-4 w-4" />
+                  </Button>
+                </Tooltip>
 
                 <Button
                   variant="ghost"
@@ -776,20 +928,20 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                 <div className="flex-1 relative">
                   <Input
                     ref={inputRef}
-                    placeholder="Type your message here..."
+                    placeholder="Type your message or /image to generate an image..."
                     value={message}
                     onChange={(e) => setMessage(e.target.value)}
                     onKeyPress={handleKeyPress}
-                    disabled={isStreaming || isGenerating}
+                    disabled={isStreaming || isGenerating || isGeneratingImage}
                     className={cn(
                       "border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0",
                       "placeholder:text-muted-foreground/60 text-base font-medium py-3",
                       "transition-all duration-200",
-                      isStreaming ? "pr-32" : "pr-24"
+                      (isStreaming || isGeneratingImage) ? "pr-32" : "pr-24"
                     )}
                   />
                   <div className="absolute right-4 top-1/2 transform -translate-y-1/2 flex items-center gap-2">
-                    {isStreaming && (
+                    {(isStreaming || isGeneratingImage) && (
                       <Button
                         variant="ghost"
                         size="sm"
@@ -800,7 +952,7 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                         Stop
                       </Button>
                     )}
-                    {(isStreaming || isGenerating) && (
+                    {(isStreaming || isGenerating || isGeneratingImage) && (
                       <div className="flex space-x-1">
                         {[0, 1, 2].map((i) => (
                           <div
@@ -817,7 +969,7 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                 <Button
                   size="icon"
                   onClick={handleSendMessage}
-                  disabled={(!message.trim() && attachedFiles.length === 0) || isStreaming || isGenerating}
+                  disabled={(!message.trim() && attachedFiles.length === 0) || isStreaming || isGenerating || isGeneratingImage}
                   className={cn(
                     "h-10 w-10 btn-t3-primary text-white rounded-full shadow-lg",
                     "disabled:opacity-50 disabled:cursor-not-allowed",
@@ -825,7 +977,7 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                     "hover:scale-105 active:scale-95"
                   )}
                 >
-                  {isStreaming || isGenerating ? (
+                  {(isStreaming || isGenerating || isGeneratingImage) ? (
                     <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
                   ) : (
                     <ArrowUp className="h-4 w-4" />
