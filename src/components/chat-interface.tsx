@@ -23,6 +23,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~
 import { Switch } from "~/components/ui/switch"
 import { Slider } from "~/components/ui/slider"
 import { type AIProvider } from "~/server/api/routers/ai-chat"
+import { GeneratedImage } from "./ui/generated-image"
 
 // Client-side constants and types
 type ClientAIProvider = "openai" | "google" | "anthropic";
@@ -118,14 +119,7 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const scrollTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined)
   const [showImageGen, setShowImageGen] = useState(false)
-  const [imagePrompt, setImagePrompt] = useState("")
-  const [isImageGenDialogOpen, setIsImageGenDialogOpen] = useState(false)
-  const [imageConfig, setImageConfig] = useState<Partial<ImageGenerationConfig>>({
-    size: "1024x1024",
-    quality: "standard",
-    style: "natural",
-    n: 1,
-  })
+  const [showImageGenDialogOpen, setShowImageGenDialogOpen] = useState(false)
 
   // Initialize AI Chat hook
   const {
@@ -304,19 +298,27 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
   // Handle message input
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault()
+      e.preventDefault();
       if (message.trim().startsWith("/image")) {
-        // Extract the prompt from the command
-        const prompt = message.trim().slice(6).trim()
+        const prompt = message.trim().slice(6).trim();
         if (prompt) {
-          setIsImageGenDialogOpen(true)
-          setImagePrompt(prompt)
+          // Use default config for image generation
+          const config: ImageGenerationConfig = {
+            provider: "openai",
+            model: "dall-e-3",
+            size: "1024x1024",
+            quality: "standard",
+            style: "natural",
+            n: 1,
+          };
+          generateImageResponse(prompt, config);
+          setMessage("");
         }
       } else {
-        handleSendMessage()
+        handleSendMessage();
       }
     }
-  }
+  };
 
   const handleSampleQuestionClick = (question: string) => {
     setMessage(question)
@@ -366,9 +368,9 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
   // Get provider from model ID
   const getProviderFromModel = (modelId: string): ClientAIProvider => {
     // Check available models first
-    if (availableModels) {
-      for (const [provider, models] of Object.entries(availableModels)) {
-        if (models[modelId]) {
+    if (availableModels?.models) {
+      for (const [provider, models] of Object.entries(availableModels.models)) {
+        if (modelId in models) {
           // Special handling for DALL-E models
           if (modelId.includes("dall-e")) {
             return "openai";
@@ -434,67 +436,6 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
   const handleEditMessage = (message: Message) => {
     setSelectedMessage(message)
     setIsDialogOpen(true)
-  }
-
-  // Handle image generation
-  const handleGenerateImage = async () => {
-    if (!imagePrompt.trim() || isGeneratingImage || !availableModels?.models) return
-
-    // Validate that the selected model supports image generation
-    const provider = getProviderFromModel(selectedModel);
-    const models = availableModels.models[provider];
-    const modelInfo = models?.[selectedModel] as ModelInfo | undefined;
-    
-    if (!modelInfo || modelInfo.type !== 'image') {
-      // If the selected model doesn't support image generation, try to find a suitable one
-      const imageModels = Object.entries(availableModels.models)
-        .flatMap(([provider, models]) => 
-          Object.entries(models)
-            .filter(([_, info]) => (info as ModelInfo).type === 'image')
-            .map(([model]) => ({ provider: provider as AIProvider, model }))
-        );
-
-      if (imageModels.length === 0) {
-        console.error("No image generation models available");
-        return;
-      }
-
-      // Use DALL-E 3 if available, otherwise use the first available image model
-      const preferredModel = imageModels.find(m => m.model === 'dall-e-3') ?? imageModels[0];
-      if (!preferredModel) {
-        console.error("No suitable image generation model found");
-        return;
-      }
-
-      const config: ImageGenerationConfig = {
-        provider: preferredModel.provider,
-        model: preferredModel.model,
-        ...imageConfig,
-      };
-
-      try {
-        await generateImageResponse(imagePrompt, config);
-        setImagePrompt("");
-        setIsImageGenDialogOpen(false);
-      } catch (error) {
-        console.error("Error generating image:", error);
-      }
-      return;
-    }
-
-    const config: ImageGenerationConfig = {
-      provider,
-      model: selectedModel,
-      ...imageConfig,
-    };
-
-    try {
-      await generateImageResponse(imagePrompt, config);
-      setImagePrompt("");
-      setIsImageGenDialogOpen(false);
-    } catch (error) {
-      console.error("Error generating image:", error);
-    }
   }
 
   return (
@@ -633,9 +574,10 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                       key={msg.id}
                       className={cn(
                         "group relative flex gap-4 message-container animate-fade-in",
-                        msg.role === "user" ? "justify-end" : "justify-start"
+                        msg.role === "user" ? "justify-end" : "justify-start",
+                        "py-2"
                       )}
-                      style={{ 
+                      style={{
                         animationDuration: "0.3s",
                         animationFillMode: "both"
                       }}
@@ -645,23 +587,48 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                           <Bot className="h-4 w-4 text-primary" />
                         </div>
                       )}
-                      
                       <Dialog open={isDialogOpen && selectedMessage?.id === msg.id} onOpenChange={(open) => {
                         setIsDialogOpen(open)
                         if (!open) setSelectedMessage(null)
                       }}>
-                        <div className="relative group/message">
+                        <div className="relative group/message flex flex-col max-w-[70%]">
                           <div
                             className={cn(
-                              "max-w-[80%] text-sm transition-all duration-200",
+                              "text-sm transition-all duration-200 shadow-md",
                               msg.role === "user"
-                                ? "bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 ml-auto px-4 py-3 rounded-2xl shadow-sm hover:shadow-md backdrop-blur-sm"
-                                : "ml-12" // Add margin for assistant messages to align with avatar
+                                ? "bg-primary text-white ml-auto px-5 py-3 rounded-2xl rounded-br-md border border-primary/30"
+                                : "bg-muted/60 dark:bg-muted/30 text-foreground ml-12 px-5 py-3 rounded-2xl rounded-bl-md border border-border/40",
+                              "backdrop-blur-sm"
                             )}
                           >
                             {msg.role === "assistant" ? (
-                              <div className="prose prose-sm dark:prose-invert max-w-none">
-                                <MarkdownRenderer>{msg.content}</MarkdownRenderer>
+                              <div className="prose prose-sm dark:prose-invert max-w-none text-foreground">
+                                {msg.content.startsWith("Generated images for prompt:") ? (
+                                  <div className="space-y-2 text-center">
+                                    {(() => {
+                                      const parts = msg.content.split("\n\n");
+                                      const prompt = msg.content.match(/Generated images for prompt: "([^"]+)"/)?.[1] || "";
+                                      const urls = parts[1]?.split("\n").filter(Boolean) || [];
+                                      return (
+                                        <>
+                                          <div className="text-base font-semibold mb-2 text-primary">{prompt}</div>
+                                          <div className="flex flex-col items-center gap-4">
+                                            {urls.map((url, index) => (
+                                              <GeneratedImage
+                                                key={index}
+                                                url={url}
+                                                prompt={prompt}
+                                                className="w-full max-w-xs rounded-xl border border-border shadow"
+                                              />
+                                            ))}
+                                          </div>
+                                        </>
+                                      );
+                                    })()}
+                                  </div>
+                                ) : (
+                                  <MarkdownRenderer>{msg.content}</MarkdownRenderer>
+                                )}
                                 <div className="flex items-center justify-between mt-2">
                                   <div className="text-xs text-muted-foreground">
                                     {msg.timestamp.toLocaleTimeString()}
@@ -679,76 +646,31 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                                 </div>
                               </div>
                             ) : (
-                              <>
-                                <div className="whitespace-pre-wrap text-black dark:text-white/90">{msg.content}</div>
-                                <div className="flex items-center justify-between mt-2 pt-2 border-t border-black/10 dark:border-white/10">
-                                  <div className="text-xs text-black/60 dark:text-white/60">
+                              <div className="flex flex-col">
+                                <div className="whitespace-pre-wrap text-white font-medium">{msg.content}</div>
+                                <div className="flex items-center justify-between mt-2 pt-2 border-t border-primary/30">
+                                  <div className="text-xs text-white/70">
                                     {msg.timestamp.toLocaleTimeString()}
                                   </div>
                                   <DialogTrigger asChild>
                                     <Button
                                       variant="ghost"
                                       size="icon"
-                                      className="h-6 w-6 opacity-0 group-hover/message:opacity-100 transition-opacity text-black/60 dark:text-white/60 hover:bg-black/5 dark:hover:bg-white/5"
+                                      className="h-6 w-6 opacity-0 group-hover/message:opacity-100 transition-opacity text-white/70 hover:bg-primary/20"
                                       onClick={() => setSelectedMessage(msg)}
                                     >
                                       <MoreVertical className="h-3 w-3" />
                                     </Button>
                                   </DialogTrigger>
                                 </div>
-                              </>
+                              </div>
                             )}
                           </div>
                         </div>
-
-                        <DialogContent className="sm:max-w-[600px]">
-                          <DialogHeader>
-                            <DialogTitle>Message Options</DialogTitle>
-                          </DialogHeader>
-                          <div className="grid gap-4 py-4">
-                            <ScrollArea className="max-h-[300px] rounded-lg border p-4">
-                              <div className="whitespace-pre-wrap text-sm">
-                                {msg.content}
-                              </div>
-                            </ScrollArea>
-                            <div className="flex justify-end gap-2">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleCopyMessage(msg.content)}
-                                className="gap-2"
-                              >
-                                <Copy className="h-4 w-4" />
-                                Copy
-                              </Button>
-                              {msg.role === "user" && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => handleEditMessage(msg)}
-                                  className="gap-2"
-                                >
-                                  <Edit2 className="h-4 w-4" />
-                                  Edit
-                                </Button>
-                              )}
-                              <Button
-                                variant="destructive"
-                                size="sm"
-                                onClick={() => handleDeleteMessage(msg.id)}
-                                className="gap-2"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                                Delete
-                              </Button>
-                            </div>
-                          </div>
-                        </DialogContent>
                       </Dialog>
-
                       {msg.role === "user" && (
-                        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-muted/40 to-muted/60 flex items-center justify-center shadow-sm">
-                          <User className="h-4 w-4" />
+                        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-primary/30 to-primary/60 flex items-center justify-center shadow-sm ml-2">
+                          <User className="h-4 w-4 text-white" />
                         </div>
                       )}
                     </div>
@@ -964,97 +886,6 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
           </div>
         </div>
       </div>
-
-      {/* Image Generation Dialog */}
-      <Dialog open={isImageGenDialogOpen} onOpenChange={setIsImageGenDialogOpen}>
-        <DialogContent className="sm:max-w-[600px]">
-          <DialogHeader>
-            <DialogTitle>Generate Image</DialogTitle>
-          </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="grid gap-2">
-              <Label>Image Prompt</Label>
-              <div className="text-sm text-muted-foreground">{imagePrompt}</div>
-            </div>
-            <div className="grid gap-4">
-              <div className="grid gap-2">
-                <Label>Image Size</Label>
-                <Select
-                  value={imageConfig.size}
-                  onValueChange={(value) => setImageConfig(prev => ({ ...prev, size: value as ImageGenerationConfig['size'] }))}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select size" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="256x256">256x256</SelectItem>
-                    <SelectItem value="512x512">512x512</SelectItem>
-                    <SelectItem value="1024x1024">1024x1024</SelectItem>
-                    <SelectItem value="1024x1792">1024x1792</SelectItem>
-                    <SelectItem value="1792x1024">1792x1024</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-2">
-                <Label>Quality</Label>
-                <Select
-                  value={imageConfig.quality}
-                  onValueChange={(value) => setImageConfig(prev => ({ ...prev, quality: value as ImageGenerationConfig['quality'] }))}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select quality" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="standard">Standard</SelectItem>
-                    <SelectItem value="hd">HD</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-2">
-                <Label>Style</Label>
-                <Select
-                  value={imageConfig.style}
-                  onValueChange={(value) => setImageConfig(prev => ({ ...prev, style: value as ImageGenerationConfig['style'] }))}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select style" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="natural">Natural</SelectItem>
-                    <SelectItem value="vivid">Vivid</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-2">
-                <Label>Number of Images: {imageConfig.n}</Label>
-                <Slider
-                  value={[imageConfig.n ?? 1]}
-                  min={1}
-                  max={4}
-                  step={1}
-                  onValueChange={([value]) => setImageConfig(prev => ({ ...prev, n: value }))}
-                />
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button
-              onClick={handleGenerateImage}
-              disabled={!imagePrompt.trim() || isGeneratingImage}
-              className="w-full"
-            >
-              {isGeneratingImage ? (
-                <div className="flex items-center gap-2">
-                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
-                  Generating...
-                </div>
-              ) : (
-                "Generate Image"
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }

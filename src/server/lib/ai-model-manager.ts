@@ -356,10 +356,17 @@ export class AIModelManager {
         });
 
         return {
-          images: result.images.map(img => ({
-            url: typeof img === 'string' ? img : img.base64 ?? '',
-            revisedPrompt: undefined, // The Vercel AI SDK doesn't provide revised prompts
-          })),
+          images: result.images.map(img => {
+            if (typeof img === 'string') {
+              // Already a URL
+              return { url: img, revisedPrompt: undefined };
+            } else if (img.base64) {
+              // Add the data URL prefix if missing
+              return { url: `data:image/png;base64,${img.base64}`, revisedPrompt: undefined };
+            } else {
+              return { url: '', revisedPrompt: undefined };
+            }
+          }),
           usage: undefined, // The Vercel AI SDK doesn't provide usage information for images
         };
       } catch (error: unknown) {
