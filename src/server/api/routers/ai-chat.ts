@@ -5,13 +5,19 @@ import {
   isValidProvider,
   type AIProvider,
   type AIModelConfig,
-  AI_PROVIDERS 
+  AI_PROVIDERS,
+  type ImageGenerationRequest,
+  type ImageGenerationResponse,
 } from "~/server/lib/ai-model-manager";
 import type { CoreMessage } from "ai";
 import { TRPCError } from "@trpc/server";
 import OpenAI from "openai";
 import { env } from "~/env";
 import { db } from "~/server/db";
+
+// Re-export types for client use
+export type { AIProvider, AIModelConfig, ImageGenerationRequest, ImageGenerationResponse };
+export { AI_PROVIDERS };
 
 // Validation schemas
 const attachmentSchema = z.object({
@@ -47,10 +53,21 @@ const chatRequestSchema = z.object({
   conversationId: z.string().optional(),
 });
 
+// Add image generation schema
+const imageGenerationSchema = z.object({
+  prompt: z.string().min(1).max(1000),
+  config: aiConfigSchema.extend({
+    size: z.enum(['256x256', '512x512', '1024x1024', '1024x1792', '1792x1024']).optional(),
+    quality: z.enum(['standard', 'hd']).optional(),
+    style: z.enum(['vivid', 'natural']).optional(),
+    n: z.number().min(1).max(4).optional(),
+  }),
+});
+
 // Helper function to generate conversation title from first message
-function generateConversationTitle(firstMessage: string): string {
+function generateConversationTitle(message: string): string {
   const maxLength = 50;
-  const cleaned = firstMessage.trim().replace(/\n/g, ' ').replace(/\s+/g, ' ');
+  const cleaned = message.trim().replace(/\n/g, ' ').replace(/\s+/g, ' ');
   
   if (cleaned.length <= maxLength) {
     return cleaned;
@@ -69,6 +86,7 @@ function generateConversationTitle(firstMessage: string): string {
 // Initialize OpenAI client
 const openai = new OpenAI({
   apiKey: env.OPENAI_API_KEY,
+  
 });
 
 // Helper function to queue summary generation
@@ -417,9 +435,9 @@ Format your responses with proper markdown structure including headers, lists, a
         } else {
           // Create new conversation
           const title = input.title || 
-            (input.messages.find(m => m.role === 'user')?.content ? 
-              generateConversationTitle(input.messages.find(m => m.role === 'user')!.content) : 
-              'New Chat');
+            (input.messages.find(m => m.role === 'user')?.content 
+              ? generateConversationTitle(input.messages.find(m => m.role === 'user')!.content)
+              : 'New Chat');
           
           conversation = await ctx.db.conversation.create({
             data: {
@@ -686,6 +704,52 @@ Format your responses with proper markdown structure including headers, lists, a
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: "Failed to update conversation title",
+        });
+      }
+    }),
+
+  // Generate image
+  generateImage: protectedProcedure
+    .input(imageGenerationSchema)
+    .mutation(async ({ input }) => {
+      try {
+        // Only allow OpenAI DALL-E models for now
+        if (input.config.provider !== AI_PROVIDERS.OPENAI || !input.config.model.startsWith('dall-e')) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Image generation is currently only supported with OpenAI DALL-E models",
+          });
+        }
+
+        // Generate image with OpenAI DALL-E
+        const response = await aiModelManager.generateImage({
+          prompt: input.prompt,
+          config: input.config,
+        });
+
+        return {
+          images: response.images,
+          usage: response.usage,
+          success: true,
+          provider: AI_PROVIDERS.OPENAI,
+          model: input.config.model,
+        };
+      } catch (error) {
+        console.error("Error generating image:", error);
+        
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        
+        // Provide more helpful error message
+        const errorMessage = error instanceof Error ? error.message : "Failed to generate image";
+        const isQuotaError = errorMessage.includes('quota') || errorMessage.includes('rate limit');
+        
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: isQuotaError 
+            ? "AI service temporarily unavailable due to high demand. Please try again in a few minutes."
+            : errorMessage,
         });
       }
     }),

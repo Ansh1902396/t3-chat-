@@ -33,12 +33,26 @@ export interface ChatConfig {
   frequencyPenalty?: number;
 }
 
+export interface ImageGenerationConfig extends ChatConfig {
+  size?: '256x256' | '512x512' | '1024x1024' | '1024x1792' | '1792x1024';
+  quality?: 'standard' | 'hd';
+  style?: 'vivid' | 'natural';
+  n?: number;
+}
+
+export interface GeneratedImage {
+  url: string;
+  revisedPrompt?: string;
+}
+
 export interface UseAIChatOptions {
   defaultConfig?: Partial<ChatConfig>;
   onError?: (error: Error) => void;
   onStreamStart?: () => void;
   onStreamEnd?: () => void;
   conversationId?: string; // For loading existing conversations
+  onImageGenerationStart?: () => void;
+  onImageGenerationEnd?: () => void;
 }
 
 export function useAIChat(options: UseAIChatOptions = {}) {
@@ -48,6 +62,8 @@ export function useAIChat(options: UseAIChatOptions = {}) {
   const [currentConversationId, setCurrentConversationId] = useState<string | undefined>(options.conversationId);
   const [conversationTitle, setConversationTitle] = useState<string | undefined>();
   const abortControllerRef = useRef<AbortController | null>(null);
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
 
   // Get available models
   const { data: availableModels, isLoading: modelsLoading } = 
@@ -372,6 +388,57 @@ Format your responses with proper markdown structure including headers, lists, a
     ));
   }, []);
 
+  // Generate image mutation
+  const generateImage = api.aiChat.generateImage.useMutation({
+    onError: (error) => {
+      options.onError?.(new Error(error.message));
+    },
+  });
+
+  // Generate image function
+  const generateImageResponse = useCallback(async (
+    prompt: string,
+    config: ImageGenerationConfig
+  ) => {
+    try {
+      setIsGeneratingImage(true);
+      setGeneratedImages([]);
+      options.onImageGenerationStart?.();
+
+      const response = await generateImage.mutateAsync({
+        prompt,
+        config,
+      });
+
+      if (response.success && response.images) {
+        setGeneratedImages(response.images);
+        
+        // Add the image generation as a message
+        const imageUrls = response.images.map(img => img.url).join('\n');
+        const messageContent = `Generated images for prompt: "${prompt}"\n\n${imageUrls}`;
+        const imageMessage: Message = {
+          id: `img_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          role: "assistant",
+          content: messageContent,
+          timestamp: new Date(),
+        };
+        addMessage("assistant", messageContent);
+
+        // Auto-save conversation
+        const finalMessages = [...messages, imageMessage];
+        await autoSaveConversation(finalMessages, config);
+      }
+
+      return response;
+    } catch (error) {
+      options.onError?.(error as Error);
+      throw error;
+    } finally {
+      setIsGeneratingImage(false);
+      options.onImageGenerationEnd?.();
+    }
+  }, [messages, addMessage, generateImage, autoSaveConversation, options]);
+
   return {
     // State
     messages,
@@ -384,6 +451,8 @@ Format your responses with proper markdown structure including headers, lists, a
     modelsLoading,
     currentConversationId,
     conversationTitle,
+    isGeneratingImage,
+    generatedImages,
 
     // Actions
     sendMessage,
@@ -396,6 +465,7 @@ Format your responses with proper markdown structure including headers, lists, a
     saveConversationManually,
     deleteMessage,
     editMessage,
+    generateImageResponse,
 
     // Utilities
     getDefaultConfig,

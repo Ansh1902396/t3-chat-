@@ -8,16 +8,36 @@ import { Input } from "~/components/ui/input"
 import { Sidebar } from "./sidebar"
 import { ModelDropdown } from "./model-dropdown"
 import { ThemeToggle } from "./theme-toggle"
-import { Menu, Sparkles, Search, Code, GraduationCap, Paperclip, ArrowUp, User, Bot, X, MoreVertical, Copy, Trash2, Edit2 } from "lucide-react"
+import { Menu, Sparkles, Search, Code, GraduationCap, Paperclip, ArrowUp, User, Bot, X, MoreVertical, Copy, Trash2, Edit2, Wand2, Image as ImageIcon } from "lucide-react"
 import { MarkdownRenderer } from "./ui/markdown-renderer"
 import { StreamingMarkdown } from "./ui/streaming-markdown"
 import { FileUpload } from "./ui/file-upload"
 import { FileAttachmentList } from "./ui/file-attachment"
-import { useAIChat, type ChatConfig, type Message } from "~/hooks/useAIChat"
+import { useAIChat, type ChatConfig, type Message, type ImageGenerationConfig } from "~/hooks/useAIChat"
 import { cn } from "~/lib/utils"
 import { useInView } from "react-intersection-observer"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "~/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "~/components/ui/dialog"
 import { ScrollArea } from "~/components/ui/scroll-area"
+import { Label } from "~/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select"
+import { Switch } from "~/components/ui/switch"
+import { Slider } from "~/components/ui/slider"
+import { type AIProvider } from "~/server/api/routers/ai-chat"
+
+// Client-side constants and types
+type ClientAIProvider = "openai" | "google" | "anthropic";
+
+const AI_PROVIDERS: Record<ClientAIProvider, ClientAIProvider> = {
+  openai: "openai",
+  google: "google",
+  anthropic: "anthropic",
+} as const;
+
+type ModelInfo = {
+  name: string;
+  description: string;
+  type?: 'text' | 'image';
+};
 
 interface User {
   id: string
@@ -96,7 +116,16 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
   })
   const [selectedMessage, setSelectedMessage] = useState<Message | null>(null)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
-  const scrollTimeoutRef = useRef<NodeJS.Timeout>()
+  const scrollTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined)
+  const [showImageGen, setShowImageGen] = useState(false)
+  const [imagePrompt, setImagePrompt] = useState("")
+  const [isImageGenDialogOpen, setIsImageGenDialogOpen] = useState(false)
+  const [imageConfig, setImageConfig] = useState<Partial<ImageGenerationConfig>>({
+    size: "1024x1024",
+    quality: "standard",
+    style: "natural",
+    n: 1,
+  })
 
   // Initialize AI Chat hook
   const {
@@ -104,9 +133,12 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
     isStreaming,
     currentStreamContent,
     isGenerating,
+    isGeneratingImage,
+    generatedImages,
     availableModels,
     modelsLoading,
     sendMessageStream,
+    generateImageResponse,
     clearChat,
     startNewConversation,
     loadConversation,
@@ -126,27 +158,6 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
       setCurrentConversationId(hookConversationId)
     }
   }, [hookConversationId])
-
-  // Transform availableModels data structure for the dropdown
-  const transformedAvailableModels = availableModels ? 
-    Object.entries(availableModels.models).flatMap(([provider, models]) =>
-      Object.entries(models).map(([modelId, modelData]) => ({
-        id: modelId,
-        name: modelData.name,
-        provider: provider,
-        available: true // All models returned from API are available
-      }))
-    ) : undefined
-
-  // Auto-select first available model if current selection is not available
-  useEffect(() => {
-    if (transformedAvailableModels && transformedAvailableModels.length > 0) {
-      const currentModelExists = transformedAvailableModels.some(model => model.id === selectedModel)
-      if (!currentModelExists) {
-        setSelectedModel(transformedAvailableModels[0]!.id)
-      }
-    }
-  }, [transformedAvailableModels, selectedModel])
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -290,10 +301,20 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
     setShowFileUpload(false)
   }
 
+  // Handle message input
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
-      handleSendMessage()
+      if (message.trim().startsWith("/image")) {
+        // Extract the prompt from the command
+        const prompt = message.trim().slice(6).trim()
+        if (prompt) {
+          setIsImageGenDialogOpen(true)
+          setImagePrompt(prompt)
+        }
+      } else {
+        handleSendMessage()
+      }
     }
   }
 
@@ -342,14 +363,46 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
     window.open(file.url, '_blank');
   };
 
-  // Helper function to determine provider from model name
-  const getProviderFromModel = (modelId: string) => {
-    if (modelId.includes("gemini")) return "google" as const
-    if (modelId.includes("gpt") || modelId.includes("o4")) return "openai" as const
-    if (modelId.includes("claude")) return "anthropic" as const
-    if (modelId.includes("deepseek")) return "openai" as const // assuming OpenAI compatible
-    return "google" as const // default
+  // Get provider from model ID
+  const getProviderFromModel = (modelId: string): ClientAIProvider => {
+    // Check available models first
+    if (availableModels) {
+      for (const [provider, models] of Object.entries(availableModels)) {
+        if (models[modelId]) {
+          // Special handling for DALL-E models
+          if (modelId.includes("dall-e")) {
+            return "openai";
+          }
+          // Special handling for Gemini Pro Vision
+          if (modelId === "gemini-pro-vision") {
+            return "google";
+          }
+          return provider as ClientAIProvider;
+        }
+      }
+    }
+
+    // Fallback to provider mapping
+    const providerMap: Record<string, ClientAIProvider> = {
+      "dall-e-3": "openai",
+      "dall-e-2": "openai",
+      "gemini-pro-vision": "google",
+    };
+
+    return providerMap[modelId] ?? "openai";
   }
+
+  // Transform availableModels for the dropdown
+  const transformedAvailableModels = availableModels ? 
+    Object.entries(availableModels.models).flatMap(([provider, models]) =>
+      Object.entries(models).map(([modelId, modelData]) => ({
+        id: modelId,
+        name: modelData.name,
+        provider,
+        available: true,
+        type: (modelData as ModelInfo).type
+      }))
+    ) : [];
 
   // Handle conversation selection from sidebar
   const handleConversationSelect = (conversationId: string) => {
@@ -381,6 +434,67 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
   const handleEditMessage = (message: Message) => {
     setSelectedMessage(message)
     setIsDialogOpen(true)
+  }
+
+  // Handle image generation
+  const handleGenerateImage = async () => {
+    if (!imagePrompt.trim() || isGeneratingImage || !availableModels?.models) return
+
+    // Validate that the selected model supports image generation
+    const provider = getProviderFromModel(selectedModel);
+    const models = availableModels.models[provider];
+    const modelInfo = models?.[selectedModel] as ModelInfo | undefined;
+    
+    if (!modelInfo || modelInfo.type !== 'image') {
+      // If the selected model doesn't support image generation, try to find a suitable one
+      const imageModels = Object.entries(availableModels.models)
+        .flatMap(([provider, models]) => 
+          Object.entries(models)
+            .filter(([_, info]) => (info as ModelInfo).type === 'image')
+            .map(([model]) => ({ provider: provider as AIProvider, model }))
+        );
+
+      if (imageModels.length === 0) {
+        console.error("No image generation models available");
+        return;
+      }
+
+      // Use DALL-E 3 if available, otherwise use the first available image model
+      const preferredModel = imageModels.find(m => m.model === 'dall-e-3') ?? imageModels[0];
+      if (!preferredModel) {
+        console.error("No suitable image generation model found");
+        return;
+      }
+
+      const config: ImageGenerationConfig = {
+        provider: preferredModel.provider,
+        model: preferredModel.model,
+        ...imageConfig,
+      };
+
+      try {
+        await generateImageResponse(imagePrompt, config);
+        setImagePrompt("");
+        setIsImageGenDialogOpen(false);
+      } catch (error) {
+        console.error("Error generating image:", error);
+      }
+      return;
+    }
+
+    const config: ImageGenerationConfig = {
+      provider,
+      model: selectedModel,
+      ...imageConfig,
+    };
+
+    try {
+      await generateImageResponse(imagePrompt, config);
+      setImagePrompt("");
+      setIsImageGenDialogOpen(false);
+    } catch (error) {
+      console.error("Error generating image:", error);
+    }
   }
 
   return (
@@ -760,6 +874,20 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                   variant="ghost"
                   size="icon"
                   className="h-10 w-10 text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-all rounded-full"
+                  onClick={() => {
+                    setMessage("/image ")
+                    // Focus the input after setting the command
+                    setTimeout(() => inputRef.current?.focus(), 0)
+                  }}
+                  title="Generate Image (Type /image followed by your prompt)"
+                >
+                  <ImageIcon className="h-4 w-4" />
+                </Button>
+
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-10 w-10 text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-all rounded-full"
                 >
                   <Search className="h-4 w-4" />
                 </Button>
@@ -776,20 +904,20 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                 <div className="flex-1 relative">
                   <Input
                     ref={inputRef}
-                    placeholder="Type your message here..."
+                    placeholder="Type your message or /image to generate an image..."
                     value={message}
                     onChange={(e) => setMessage(e.target.value)}
                     onKeyPress={handleKeyPress}
-                    disabled={isStreaming || isGenerating}
+                    disabled={isStreaming || isGenerating || isGeneratingImage}
                     className={cn(
                       "border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0",
                       "placeholder:text-muted-foreground/60 text-base font-medium py-3",
                       "transition-all duration-200",
-                      isStreaming ? "pr-32" : "pr-24"
+                      (isStreaming || isGeneratingImage) ? "pr-32" : "pr-24"
                     )}
                   />
                   <div className="absolute right-4 top-1/2 transform -translate-y-1/2 flex items-center gap-2">
-                    {isStreaming && (
+                    {(isStreaming || isGeneratingImage) && (
                       <Button
                         variant="ghost"
                         size="sm"
@@ -800,7 +928,7 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                         Stop
                       </Button>
                     )}
-                    {(isStreaming || isGenerating) && (
+                    {(isStreaming || isGenerating || isGeneratingImage) && (
                       <div className="flex space-x-1">
                         {[0, 1, 2].map((i) => (
                           <div
@@ -817,7 +945,7 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                 <Button
                   size="icon"
                   onClick={handleSendMessage}
-                  disabled={(!message.trim() && attachedFiles.length === 0) || isStreaming || isGenerating}
+                  disabled={(!message.trim() && attachedFiles.length === 0) || isStreaming || isGenerating || isGeneratingImage}
                   className={cn(
                     "h-10 w-10 btn-t3-primary text-white rounded-full shadow-lg",
                     "disabled:opacity-50 disabled:cursor-not-allowed",
@@ -825,7 +953,7 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                     "hover:scale-105 active:scale-95"
                   )}
                 >
-                  {isStreaming || isGenerating ? (
+                  {(isStreaming || isGenerating || isGeneratingImage) ? (
                     <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
                   ) : (
                     <ArrowUp className="h-4 w-4" />
@@ -836,6 +964,97 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
           </div>
         </div>
       </div>
+
+      {/* Image Generation Dialog */}
+      <Dialog open={isImageGenDialogOpen} onOpenChange={setIsImageGenDialogOpen}>
+        <DialogContent className="sm:max-w-[600px]">
+          <DialogHeader>
+            <DialogTitle>Generate Image</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label>Image Prompt</Label>
+              <div className="text-sm text-muted-foreground">{imagePrompt}</div>
+            </div>
+            <div className="grid gap-4">
+              <div className="grid gap-2">
+                <Label>Image Size</Label>
+                <Select
+                  value={imageConfig.size}
+                  onValueChange={(value) => setImageConfig(prev => ({ ...prev, size: value as ImageGenerationConfig['size'] }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select size" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="256x256">256x256</SelectItem>
+                    <SelectItem value="512x512">512x512</SelectItem>
+                    <SelectItem value="1024x1024">1024x1024</SelectItem>
+                    <SelectItem value="1024x1792">1024x1792</SelectItem>
+                    <SelectItem value="1792x1024">1792x1024</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label>Quality</Label>
+                <Select
+                  value={imageConfig.quality}
+                  onValueChange={(value) => setImageConfig(prev => ({ ...prev, quality: value as ImageGenerationConfig['quality'] }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select quality" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="standard">Standard</SelectItem>
+                    <SelectItem value="hd">HD</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label>Style</Label>
+                <Select
+                  value={imageConfig.style}
+                  onValueChange={(value) => setImageConfig(prev => ({ ...prev, style: value as ImageGenerationConfig['style'] }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select style" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="natural">Natural</SelectItem>
+                    <SelectItem value="vivid">Vivid</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label>Number of Images: {imageConfig.n}</Label>
+                <Slider
+                  value={[imageConfig.n ?? 1]}
+                  min={1}
+                  max={4}
+                  step={1}
+                  onValueChange={([value]) => setImageConfig(prev => ({ ...prev, n: value }))}
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              onClick={handleGenerateImage}
+              disabled={!imagePrompt.trim() || isGeneratingImage}
+              className="w-full"
+            >
+              {isGeneratingImage ? (
+                <div className="flex items-center gap-2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                  Generating...
+                </div>
+              ) : (
+                "Generate Image"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
