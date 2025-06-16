@@ -45,14 +45,15 @@ model Session {
 }
 
 model User {
-    id            String         @id @default(cuid())
+    id            String           @id @default(cuid())
     name          String?
-    email         String?        @unique
+    email         String?          @unique
     emailVerified DateTime?
     image         String?
     accounts      Account[]
     sessions      Session[]
     conversations Conversation[]
+    providers     CustomProvider[]
 }
 
 model VerificationToken {
@@ -118,4 +119,20 @@ model ChatConfig {
     topK             Int?
     presencePenalty  Float?
     frequencyPenalty Float?
+}
+
+model CustomProvider {
+    id          String   @id @default(cuid())
+    name        String   // User-defined name for the provider
+    baseUrl     String?  // Optional custom base URL for the API
+    apiKey      String   // Encrypted API key
+    model       String   // Default model to use with this provider
+    userId      String
+    user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+    createdAt   DateTime @default(now())
+    updatedAt   DateTime @updatedAt
+    isActive    Boolean  @default(true)
+
+    @@unique([userId, name])
+    @@index([userId])
 }
