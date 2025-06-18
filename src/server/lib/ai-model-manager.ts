@@ -192,6 +192,8 @@ export interface ImageGenerationResponse {
   };
 }
 
+
+
 // AI Model Manager class
 export class AIModelManager {
   private static instance: AIModelManager;
@@ -210,17 +212,17 @@ export class AIModelManager {
 
   private initializeProviders(): void {
     // Initialize OpenAI
-    if (env.OPENAI_API_KEY) {
+    if (env.OPENAI_API_KEY && env.OPENAI_API_KEY.trim() !== '') {
       this.providerClients.set(AI_PROVIDERS.OPENAI, openai);
     }
 
     // Initialize Anthropic
-    if (env.ANTHROPIC_API_KEY) {
+    if (env.ANTHROPIC_API_KEY && env.ANTHROPIC_API_KEY.trim() !== '') {
       this.providerClients.set(AI_PROVIDERS.ANTHROPIC, anthropic);
     }
 
     // Initialize Google
-    if (env.GOOGLE_GENERATIVE_AI_API_KEY) {
+    if (env.GOOGLE_GENERATIVE_AI_API_KEY && env.GOOGLE_GENERATIVE_AI_API_KEY.trim() !== '') {
       this.providerClients.set(AI_PROVIDERS.GOOGLE, google);
     }
   }

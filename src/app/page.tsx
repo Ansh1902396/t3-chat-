@@ -8,6 +8,9 @@ import { api } from "~/trpc/react"
 
 export default function Page() {
   const { data: session, status } = useSession()
+  const { data: userData, refetch: refetchUser } = api.auth.getUser.useQuery(undefined, {
+    enabled: !!session?.user,
+  })
   const { data: userStats } = api.auth.getUserStats.useQuery(undefined, {
     enabled: !!session?.user,
   })
@@ -32,17 +35,25 @@ export default function Page() {
 
   // Transform session user to match ChatInterface expectations
   const user = {
-    id: session.user.id!,
-    name: session.user.name || "User",
-    email: session.user.email || "",
-    avatar: session.user.image || "",
+    id: userData?.id || session.user.id!,
+    name: userData?.name || session.user.name || "User",
+    email: userData?.email || session.user.email || "",
+    avatar: userData?.image || session.user.image || "",
     plan: userStats?.plan || "free",
-    credits: userStats?.credits || 100,
+    credits: userData?.credits || 20, // Default to 20 as set in database
   }
 
   return (
     <CommandPaletteProvider>
-      <ChatInterface user={user} onLogout={handleLogout} />
+      <ChatInterface 
+        user={user} 
+        onLogout={handleLogout} 
+        onCreditsUpdated={async () => {
+          console.log('Credits updated, refetching user data...');
+          await refetchUser();
+          console.log('User data refetched');
+        }} 
+      />
     </CommandPaletteProvider>
   )
 }

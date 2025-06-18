@@ -5,20 +5,14 @@ import {
   isValidProvider,
   type AIProvider,
   type AIModelConfig,
-  AI_PROVIDERS,
-  type ImageGenerationRequest,
-  type ImageGenerationResponse,
+  AI_PROVIDERS
 } from "~/server/lib/ai-model-manager";
+import { getModelCost, hasInsufficientCredits } from "~/lib/model-costs";
 import type { CoreMessage } from "ai";
 import { TRPCError } from "@trpc/server";
 import OpenAI from "openai";
 import { env } from "~/env";
 import { db } from "~/server/db";
-import { getModelCost, canAffordModel } from "~/lib/model-costs";
-
-// Re-export types for client use
-export type { AIProvider, AIModelConfig, ImageGenerationRequest, ImageGenerationResponse };
-export { AI_PROVIDERS };
 
 // Validation schemas
 const attachmentSchema = z.object({
@@ -50,40 +44,14 @@ const aiConfigSchema = z.object({
 
 const chatRequestSchema = z.object({
   messages: z.array(messageSchema).min(1),
-  config: aiConfigSchema.extend({
-    webSearch: z.object({
-      enabled: z.boolean(),
-      searchContextSize: z.enum(['low', 'medium', 'high']).optional(),
-      userLocation: z.object({
-        type: z.literal('approximate'),
-        city: z.string().optional(),
-        region: z.string().optional(),
-        country: z.string().optional(),
-      }).optional(),
-    }).optional(),
-  }),
+  config: aiConfigSchema,
   conversationId: z.string().optional(),
-  toolChoice: z.object({
-    type: z.literal('tool'),
-    toolName: z.literal('web_search_preview'),
-  }).optional(),
-});
-
-// Add image generation schema
-const imageGenerationSchema = z.object({
-  prompt: z.string().min(1).max(1000),
-  config: aiConfigSchema.extend({
-    size: z.enum(['256x256', '512x512', '1024x1024', '1024x1792', '1792x1024']).optional(),
-    quality: z.enum(['standard', 'hd']).optional(),
-    style: z.enum(['vivid', 'natural']).optional(),
-    n: z.number().min(1).max(4).optional(),
-  }),
 });
 
 // Helper function to generate conversation title from first message
-function generateConversationTitle(message: string): string {
+function generateConversationTitle(firstMessage: string): string {
   const maxLength = 50;
-  const cleaned = message.trim().replace(/\n/g, ' ').replace(/\s+/g, ' ');
+  const cleaned = firstMessage.trim().replace(/\n/g, ' ').replace(/\s+/g, ' ');
   
   if (cleaned.length <= maxLength) {
     return cleaned;
@@ -102,7 +70,6 @@ function generateConversationTitle(message: string): string {
 // Initialize OpenAI client
 const openai = new OpenAI({
   apiKey: env.OPENAI_API_KEY,
-  
 });
 
 // Helper function to queue summary generation
@@ -228,8 +195,9 @@ export const aiChatRouter = createTRPCRouter({
     .mutation(async ({ input, ctx }) => {
       try {
         // Check user credits first
-        const user = await ctx.db.user.findUnique({
+        const user = await db.user.findUnique({
           where: { id: ctx.session.user.id },
+          select: { credits: true },
         });
 
         if (!user) {
@@ -239,13 +207,11 @@ export const aiChatRouter = createTRPCRouter({
           });
         }
 
-        const userCredits = (user as any)?.credits ?? 0;
         const modelCost = getModelCost(input.config.model);
-
-        if (!canAffordModel(userCredits, input.config.model)) {
+        if (hasInsufficientCredits(user.credits, input.config.model)) {
           throw new TRPCError({
-            code: "FORBIDDEN",
-            message: `Insufficient credits. This model requires ${modelCost} credits, but you only have ${userCredits} credits available.`,
+            code: "PAYMENT_REQUIRED",
+            message: `Insufficient credits. This model costs ${modelCost.cost} credits, but you only have ${user.credits} credits remaining.`,
           });
         }
 
@@ -255,17 +221,6 @@ export const aiChatRouter = createTRPCRouter({
             code: "BAD_REQUEST",
             message: `Invalid model ${input.config.model} for provider ${input.config.provider}`,
           });
-        }
-
-        // Validate web search capability if enabled
-        if (input.config.webSearch?.enabled) {
-          const modelInfo = aiModelManager.getAvailableModels(input.config.provider)[input.config.model];
-          if (!modelInfo?.capabilities?.webSearch) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: `Model ${input.config.model} does not support web search`,
-            });
-          }
         }
 
         // Add system prompt for proper formatting
@@ -286,9 +241,7 @@ Always include the language identifier after the opening triple backticks for pr
 
 For inline code, use single backticks: \`variableName\` or \`functionName()\`.
 
-Format your responses with proper markdown structure including headers, lists, and code blocks as appropriate.
-
-When using web search, always cite your sources using markdown links: [source title](url).`
+Format your responses with proper markdown structure including headers, lists, and code blocks as appropriate.`
         };
 
         // Prepend system prompt if not already present
@@ -296,11 +249,17 @@ When using web search, always cite your sources using markdown links: [source ti
           ? input.messages 
           : [systemPrompt, ...input.messages];
 
-        // Generate response
-        const response = await aiModelManager.generateResponse({
-          messages: messages as CoreMessage[],
-          config: input.config as AIModelConfig,
-          toolChoice: input.toolChoice,
+        // Define fallback providers in order of preference
+        const fallbackProviders: Array<{ provider: AIProvider; model: string }> = [
+          { provider: input.config.provider, model: input.config.model }, // Original choice
+          { provider: "google", model: "gemini-1.5-flash" }, // Fast and reliable fallback
+          { provider: "anthropic", model: "claude-3-5-haiku-20241022" }, // Alternative fallback
+        ];
+
+        // Remove duplicates and invalid providers
+        const validFallbacks = fallbackProviders.filter((fallback, index, arr) => {
+          const isUnique = arr.findIndex(f => f.provider === fallback.provider && f.model === fallback.model) === index;
+          return isUnique && aiModelManager.getAvailableProviders().includes(fallback.provider);
         });
 
         let lastError: Error | null = null;
@@ -321,10 +280,12 @@ When using web search, always cite your sources using markdown links: [source ti
             });
 
             // Deduct credits after successful response
-            await ctx.db.user.update({
+            await db.user.update({
               where: { id: ctx.session.user.id },
               data: {
-                ...(({ credits: { decrement: modelCost } } as any)),
+                credits: {
+                  decrement: modelCost.cost,
+                },
               },
             });
 
@@ -335,8 +296,8 @@ When using web search, always cite your sources using markdown links: [source ti
               success: true,
               provider: fallback.provider, // Include which provider was actually used
               model: fallback.model,
-              creditsUsed: modelCost,
-              creditsRemaining: userCredits - modelCost,
+              creditsUsed: modelCost.cost,
+              remainingCredits: user.credits - modelCost.cost,
             };
           } catch (error) {
             console.error(`Failed with provider ${fallback.provider}:`, error);
@@ -359,6 +320,7 @@ When using web search, always cite your sources using markdown links: [source ti
 
         // If all providers failed, throw the last error
         throw lastError || new Error('All providers failed');
+
       } catch (error) {
         console.error("Error generating AI response:", error);
         
@@ -382,8 +344,31 @@ When using web search, always cite your sources using markdown links: [source ti
   // Stream AI response
   streamResponse: protectedProcedure
     .input(chatRequestSchema)
-    .subscription(async function* ({ input }) {
+    .subscription(async function* ({ input, ctx }) {
       try {
+        // Check user credits first
+        const user = await db.user.findUnique({
+          where: { id: ctx.session.user.id },
+          select: { credits: true },
+        });
+
+        if (!user) {
+          yield {
+            type: "error" as const,
+            message: "User not found",
+          };
+          return;
+        }
+
+        const modelCost = getModelCost(input.config.model);
+        if (hasInsufficientCredits(user.credits, input.config.model)) {
+          yield {
+            type: "error" as const,
+            message: `Insufficient credits. This model costs ${modelCost.cost} credits, but you only have ${user.credits} credits remaining.`,
+          };
+          return;
+        }
+
         // Validate the model
         if (!aiModelManager.validateModel(input.config.provider, input.config.model)) {
           yield {
@@ -411,9 +396,21 @@ When using web search, always cite your sources using markdown links: [source ti
           };
         }
 
+        // Deduct credits after successful streaming
+        await db.user.update({
+          where: { id: ctx.session.user.id },
+          data: {
+            credits: {
+              decrement: modelCost.cost,
+            },
+          },
+        });
+
         yield {
           type: "end" as const,
           message: "Response generation completed",
+          creditsUsed: modelCost.cost,
+          remainingCredits: user.credits - modelCost.cost,
         };
 
       } catch (error) {
@@ -489,9 +486,9 @@ When using web search, always cite your sources using markdown links: [source ti
         } else {
           // Create new conversation
           const title = input.title || 
-            (input.messages.find(m => m.role === 'user')?.content 
-              ? generateConversationTitle(input.messages.find(m => m.role === 'user')!.content)
-              : 'New Chat');
+            (input.messages.find(m => m.role === 'user')?.content ? 
+              generateConversationTitle(input.messages.find(m => m.role === 'user')!.content) : 
+              'New Chat');
           
           conversation = await ctx.db.conversation.create({
             data: {
@@ -758,52 +755,6 @@ When using web search, always cite your sources using markdown links: [source ti
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: "Failed to update conversation title",
-        });
-      }
-    }),
-
-  // Generate image
-  generateImage: protectedProcedure
-    .input(imageGenerationSchema)
-    .mutation(async ({ input }) => {
-      try {
-        // Only allow OpenAI DALL-E models for now
-        if (input.config.provider !== AI_PROVIDERS.OPENAI || !input.config.model.startsWith('dall-e')) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Image generation is currently only supported with OpenAI DALL-E models",
-          });
-        }
-
-        // Generate image with OpenAI DALL-E
-        const response = await aiModelManager.generateImage({
-          prompt: input.prompt,
-          config: input.config,
-        });
-
-        return {
-          images: response.images,
-          usage: response.usage,
-          success: true,
-          provider: AI_PROVIDERS.OPENAI,
-          model: input.config.model,
-        };
-      } catch (error) {
-        console.error("Error generating image:", error);
-        
-        if (error instanceof TRPCError) {
-          throw error;
-        }
-        
-        // Provide more helpful error message
-        const errorMessage = error instanceof Error ? error.message : "Failed to generate image";
-        const isQuotaError = errorMessage.includes('quota') || errorMessage.includes('rate limit');
-        
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: isQuotaError 
-            ? "AI service temporarily unavailable due to high demand. Please try again in a few minutes."
-            : errorMessage,
         });
       }
     }),
