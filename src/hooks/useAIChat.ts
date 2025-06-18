@@ -38,6 +38,7 @@ export interface UseAIChatOptions {
   onError?: (error: Error) => void;
   onStreamStart?: () => void;
   onStreamEnd?: () => void;
+  onCreditUsed?: (creditsUsed: number, creditsRemaining: number, modelName: string) => void;
   conversationId?: string; // For loading existing conversations
 }
 
@@ -234,6 +235,11 @@ Format your responses with proper markdown structure including headers, lists, a
         messages: messagesForAPI,
         config,
       });
+
+      // Handle credit usage if available
+      if (response.creditsUsed !== undefined && response.creditsRemaining !== undefined) {
+        options.onCreditUsed?.(response.creditsUsed, response.creditsRemaining, config.model);
+      }
 
       // Simulate streaming by gradually revealing the content
       const fullContent = response.content;

@@ -2,8 +2,9 @@
 import { Button } from "~/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu"
 import { Badge } from "~/components/ui/badge"
-import { ChevronDown, Eye, FileText, Info, Crown, Sparkles, Loader2 } from "lucide-react"
+import { ChevronDown, Eye, FileText, Info, Crown, Sparkles, Loader2, Zap, Star, Image } from "lucide-react"
 import { useState } from "react"
+import { getModelCost, getModelTier } from "~/lib/model-costs"
 
 // Helper function to get model display info
 const getModelDisplayInfo = (modelId: string, modelName: string) => {
@@ -30,7 +31,11 @@ const getModelDisplayInfo = (modelId: string, modelName: string) => {
     features.push("link");
   }
 
-  return { icon, features };
+  // Get cost and tier information
+  const cost = getModelCost(modelId);
+  const tier = getModelTier(modelId);
+
+  return { icon, features, cost, tier };
 };
 
 interface ModelDropdownProps {
@@ -43,19 +48,23 @@ interface ModelDropdownProps {
     available: boolean
   }>
   isLoading?: boolean
+  userCredits?: number
 }
 
-export function ModelDropdown({ selectedModel, onModelChange, availableModels, isLoading }: ModelDropdownProps) {
+export function ModelDropdown({ selectedModel, onModelChange, availableModels, isLoading, userCredits = 0 }: ModelDropdownProps) {
   const [isOpen, setIsOpen] = useState(false)
   
   // If we have available models, use them; otherwise show loading or empty state
   const models = availableModels?.map(model => {
     const displayInfo = getModelDisplayInfo(model.id, model.name);
+    const canAfford = userCredits >= displayInfo.cost;
     return {
       ...model,
       ...displayInfo,
       description: `${model.provider} model - ${model.name}`,
       premium: false, // For now, assume all API models are available (can be enhanced later)
+      available: model.available && canAfford, // Model is available if API says so AND user can afford it
+      canAfford,
     };
   }) || [];
 
@@ -101,16 +110,21 @@ export function ModelDropdown({ selectedModel, onModelChange, availableModels, i
         <Button
           variant="ghost"
           className="h-10 px-4 text-sm font-semibold text-foreground hover:text-foreground 
-                   hover:bg-gradient-to-r hover:from-muted/40 hover:to-muted/20 transition-all duration-200 group rounded-full"
+                   hover:bg-gradient-to-r hover:from-muted/40 hover:to-muted/20 transition-smooth group rounded-full hover-lift"
         >
           <span className="mr-2 text-base">{currentModel?.icon || "🤖"}</span>
           {currentModel?.name || "Select Model"}
-          <ChevronDown className={`ml-2 h-3 w-3 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`} />
+          {currentModel && (
+            <Badge variant="outline" className="ml-2 text-xs">
+              {currentModel.cost} {currentModel.cost === 1 ? 'credit' : 'credits'}
+            </Badge>
+          )}
+          <ChevronDown className={`ml-2 h-3 w-3 transition-smooth ${isOpen ? "rotate-180" : ""}`} />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
-        className="w-[420px] p-0 animate-scale-in border-border/50 shadow-2xl card-t3 rounded-3xl"
+        className="w-[420px] p-0 animate-fade-in-up border-border/50 shadow-2xl card-t3 rounded-3xl"
       >
         {/* Premium Banner */}
         <div className="p-6 bg-gradient-to-r from-primary/5 via-primary/10 to-primary/5 border-b border-border/30 rounded-t-3xl">
@@ -138,7 +152,7 @@ export function ModelDropdown({ selectedModel, onModelChange, availableModels, i
             <DropdownMenuItem
               key={model.id}
               className={`flex items-center justify-between p-4 cursor-pointer rounded-2xl m-1
-                       transition-all duration-200 animate-slide-in ${
+                       transition-smooth animate-fade-in-right hover-lift ${
                          !model.available
                            ? "opacity-40 cursor-not-allowed"
                            : "hover:bg-gradient-to-r hover:from-muted/40 hover:to-muted/20"
@@ -156,19 +170,37 @@ export function ModelDropdown({ selectedModel, onModelChange, availableModels, i
                 <div className="flex flex-col items-start min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="font-bold text-sm tracking-tight truncate">{model.name}</span>
-                    {!model.available && (
+                    
+                    {/* Credit cost badge */}
+                    <Badge
+                      variant="outline"
+                      className={`text-xs px-2 py-1 rounded-full font-bold transition-smooth ${
+                        model.tier === 'image' 
+                          ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 border-purple-300'
+                          : model.tier === 'high'
+                          ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 border-orange-300'
+                          : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 border-green-300'
+                      }`}
+                    >
+                      {model.tier === 'image' && <Image className="mr-1 h-2.5 w-2.5" />}
+                      {model.tier === 'high' && <Star className="mr-1 h-2.5 w-2.5" />}
+                      {model.tier === 'low' && <Zap className="mr-1 h-2.5 w-2.5" />}
+                      {model.cost} {model.cost === 1 ? 'credit' : 'credits'}
+                    </Badge>
+
+                    {!model.canAfford && (
                       <Badge
                         variant="secondary"
-                        className="text-xs px-2 py-1 bg-gradient-to-r from-primary/20 to-primary/10 text-primary border-primary/20 rounded-full font-bold"
+                        className="text-xs px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 border-red-300 rounded-full font-bold"
                       >
-                        <Crown className="mr-1 h-2.5 w-2.5" />
-                        Pro
+                        Insufficient credits
                       </Badge>
                     )}
+
                     {selectedModel === model.id && (
                       <Badge
                         variant="default"
-                        className="text-xs px-2 py-1 bg-primary/20 text-primary border-primary/20 rounded-full font-bold"
+                        className="text-xs px-2 py-1 bg-primary/20 text-primary border-primary/20 rounded-full font-bold animate-pulse"
                       >
                         Active
                       </Badge>

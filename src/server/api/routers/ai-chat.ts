@@ -12,6 +12,7 @@ import { TRPCError } from "@trpc/server";
 import OpenAI from "openai";
 import { env } from "~/env";
 import { db } from "~/server/db";
+import { getModelCost, canAffordModel } from "~/lib/model-costs";
 
 // Validation schemas
 const attachmentSchema = z.object({
@@ -193,6 +194,28 @@ export const aiChatRouter = createTRPCRouter({
     .input(chatRequestSchema)
     .mutation(async ({ input, ctx }) => {
       try {
+        // Check user credits first
+        const user = await ctx.db.user.findUnique({
+          where: { id: ctx.session.user.id },
+        });
+
+        if (!user) {
+          throw new TRPCError({
+            code: "UNAUTHORIZED",
+            message: "User not found",
+          });
+        }
+
+        const userCredits = (user as any)?.credits ?? 0;
+        const modelCost = getModelCost(input.config.model);
+
+        if (!canAffordModel(userCredits, input.config.model)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: `Insufficient credits. This model requires ${modelCost} credits, but you only have ${userCredits} credits available.`,
+          });
+        }
+
         // Validate the model
         if (!aiModelManager.validateModel(input.config.provider, input.config.model)) {
           throw new TRPCError({
@@ -257,6 +280,14 @@ Format your responses with proper markdown structure including headers, lists, a
               config: config as AIModelConfig,
             });
 
+            // Deduct credits after successful response
+            await ctx.db.user.update({
+              where: { id: ctx.session.user.id },
+              data: {
+                ...(({ credits: { decrement: modelCost } } as any)),
+              },
+            });
+
             return {
               content: response.content,
               usage: response.usage,
@@ -264,6 +295,8 @@ Format your responses with proper markdown structure including headers, lists, a
               success: true,
               provider: fallback.provider, // Include which provider was actually used
               model: fallback.model,
+              creditsUsed: modelCost,
+              creditsRemaining: userCredits - modelCost,
             };
           } catch (error) {
             console.error(`Failed with provider ${fallback.provider}:`, error);
