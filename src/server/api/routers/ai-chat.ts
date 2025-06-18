@@ -5,7 +5,9 @@ import {
   isValidProvider,
   type AIProvider,
   type AIModelConfig,
-  AI_PROVIDERS 
+  AI_PROVIDERS,
+  type ImageGenerationRequest,
+  type ImageGenerationResponse,
 } from "~/server/lib/ai-model-manager";
 import type { CoreMessage } from "ai";
 import { TRPCError } from "@trpc/server";
@@ -13,6 +15,10 @@ import OpenAI from "openai";
 import { env } from "~/env";
 import { db } from "~/server/db";
 import { getModelCost, canAffordModel } from "~/lib/model-costs";
+
+// Re-export types for client use
+export type { AIProvider, AIModelConfig, ImageGenerationRequest, ImageGenerationResponse };
+export { AI_PROVIDERS };
 
 // Validation schemas
 const attachmentSchema = z.object({
@@ -44,14 +50,40 @@ const aiConfigSchema = z.object({
 
 const chatRequestSchema = z.object({
   messages: z.array(messageSchema).min(1),
-  config: aiConfigSchema,
+  config: aiConfigSchema.extend({
+    webSearch: z.object({
+      enabled: z.boolean(),
+      searchContextSize: z.enum(['low', 'medium', 'high']).optional(),
+      userLocation: z.object({
+        type: z.literal('approximate'),
+        city: z.string().optional(),
+        region: z.string().optional(),
+        country: z.string().optional(),
+      }).optional(),
+    }).optional(),
+  }),
   conversationId: z.string().optional(),
+  toolChoice: z.object({
+    type: z.literal('tool'),
+    toolName: z.literal('web_search_preview'),
+  }).optional(),
+});
+
+// Add image generation schema
+const imageGenerationSchema = z.object({
+  prompt: z.string().min(1).max(1000),
+  config: aiConfigSchema.extend({
+    size: z.enum(['256x256', '512x512', '1024x1024', '1024x1792', '1792x1024']).optional(),
+    quality: z.enum(['standard', 'hd']).optional(),
+    style: z.enum(['vivid', 'natural']).optional(),
+    n: z.number().min(1).max(4).optional(),
+  }),
 });
 
 // Helper function to generate conversation title from first message
-function generateConversationTitle(firstMessage: string): string {
+function generateConversationTitle(message: string): string {
   const maxLength = 50;
-  const cleaned = firstMessage.trim().replace(/\n/g, ' ').replace(/\s+/g, ' ');
+  const cleaned = message.trim().replace(/\n/g, ' ').replace(/\s+/g, ' ');
   
   if (cleaned.length <= maxLength) {
     return cleaned;
@@ -70,6 +102,7 @@ function generateConversationTitle(firstMessage: string): string {
 // Initialize OpenAI client
 const openai = new OpenAI({
   apiKey: env.OPENAI_API_KEY,
+  
 });
 
 // Helper function to queue summary generation
@@ -224,6 +257,17 @@ export const aiChatRouter = createTRPCRouter({
           });
         }
 
+        // Validate web search capability if enabled
+        if (input.config.webSearch?.enabled) {
+          const modelInfo = aiModelManager.getAvailableModels(input.config.provider)[input.config.model];
+          if (!modelInfo?.capabilities?.webSearch) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Model ${input.config.model} does not support web search`,
+            });
+          }
+        }
+
         // Add system prompt for proper formatting
         const systemPrompt = {
           role: "system" as const,
@@ -242,7 +286,9 @@ Always include the language identifier after the opening triple backticks for pr
 
 For inline code, use single backticks: \`variableName\` or \`functionName()\`.
 
-Format your responses with proper markdown structure including headers, lists, and code blocks as appropriate.`
+Format your responses with proper markdown structure including headers, lists, and code blocks as appropriate.
+
+When using web search, always cite your sources using markdown links: [source title](url).`
         };
 
         // Prepend system prompt if not already present
@@ -250,17 +296,11 @@ Format your responses with proper markdown structure including headers, lists, a
           ? input.messages 
           : [systemPrompt, ...input.messages];
 
-        // Define fallback providers in order of preference
-        const fallbackProviders: Array<{ provider: AIProvider; model: string }> = [
-          { provider: input.config.provider, model: input.config.model }, // Original choice
-          { provider: "google", model: "gemini-1.5-flash" }, // Fast and reliable fallback
-          { provider: "anthropic", model: "claude-3-5-haiku-20241022" }, // Alternative fallback
-        ];
-
-        // Remove duplicates and invalid providers
-        const validFallbacks = fallbackProviders.filter((fallback, index, arr) => {
-          const isUnique = arr.findIndex(f => f.provider === fallback.provider && f.model === fallback.model) === index;
-          return isUnique && aiModelManager.getAvailableProviders().includes(fallback.provider);
+        // Generate response
+        const response = await aiModelManager.generateResponse({
+          messages: messages as CoreMessage[],
+          config: input.config as AIModelConfig,
+          toolChoice: input.toolChoice,
         });
 
         let lastError: Error | null = null;
@@ -319,7 +359,6 @@ Format your responses with proper markdown structure including headers, lists, a
 
         // If all providers failed, throw the last error
         throw lastError || new Error('All providers failed');
-
       } catch (error) {
         console.error("Error generating AI response:", error);
         
@@ -450,9 +489,9 @@ Format your responses with proper markdown structure including headers, lists, a
         } else {
           // Create new conversation
           const title = input.title || 
-            (input.messages.find(m => m.role === 'user')?.content ? 
-              generateConversationTitle(input.messages.find(m => m.role === 'user')!.content) : 
-              'New Chat');
+            (input.messages.find(m => m.role === 'user')?.content 
+              ? generateConversationTitle(input.messages.find(m => m.role === 'user')!.content)
+              : 'New Chat');
           
           conversation = await ctx.db.conversation.create({
             data: {
@@ -719,6 +758,52 @@ Format your responses with proper markdown structure including headers, lists, a
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: "Failed to update conversation title",
+        });
+      }
+    }),
+
+  // Generate image
+  generateImage: protectedProcedure
+    .input(imageGenerationSchema)
+    .mutation(async ({ input }) => {
+      try {
+        // Only allow OpenAI DALL-E models for now
+        if (input.config.provider !== AI_PROVIDERS.OPENAI || !input.config.model.startsWith('dall-e')) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Image generation is currently only supported with OpenAI DALL-E models",
+          });
+        }
+
+        // Generate image with OpenAI DALL-E
+        const response = await aiModelManager.generateImage({
+          prompt: input.prompt,
+          config: input.config,
+        });
+
+        return {
+          images: response.images,
+          usage: response.usage,
+          success: true,
+          provider: AI_PROVIDERS.OPENAI,
+          model: input.config.model,
+        };
+      } catch (error) {
+        console.error("Error generating image:", error);
+        
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        
+        // Provide more helpful error message
+        const errorMessage = error instanceof Error ? error.message : "Failed to generate image";
+        const isQuotaError = errorMessage.includes('quota') || errorMessage.includes('rate limit');
+        
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: isQuotaError 
+            ? "AI service temporarily unavailable due to high demand. Please try again in a few minutes."
+            : errorMessage,
         });
       }
     }),

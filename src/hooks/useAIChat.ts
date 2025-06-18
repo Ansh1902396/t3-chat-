@@ -20,6 +20,11 @@ export interface Message {
   content: string;
   timestamp: Date;
   attachments?: MessageAttachment[];
+  sources?: Array<{
+    title: string;
+    url: string;
+    content?: string;
+  }>;
 }
 
 export interface ChatConfig {
@@ -31,6 +36,28 @@ export interface ChatConfig {
   topK?: number;
   presencePenalty?: number;
   frequencyPenalty?: number;
+  webSearch?: {
+    enabled: boolean;
+    searchContextSize?: 'low' | 'medium' | 'high';
+    userLocation?: {
+      type: 'approximate';
+      city?: string;
+      region?: string;
+      country?: string;
+    };
+  };
+}
+
+export interface ImageGenerationConfig extends ChatConfig {
+  size?: '256x256' | '512x512' | '1024x1024' | '1024x1792' | '1792x1024';
+  quality?: 'standard' | 'hd';
+  style?: 'vivid' | 'natural';
+  n?: number;
+}
+
+export interface GeneratedImage {
+  url: string;
+  revisedPrompt?: string;
 }
 
 export interface UseAIChatOptions {
@@ -40,6 +67,10 @@ export interface UseAIChatOptions {
   onStreamEnd?: () => void;
   onCreditUsed?: (creditsUsed: number, creditsRemaining: number, modelName: string) => void;
   conversationId?: string; // For loading existing conversations
+  onImageGenerationStart?: () => void;
+  onImageGenerationEnd?: () => void;
+  onWebSearchStart?: () => void;
+  onWebSearchEnd?: () => void;
 }
 
 export function useAIChat(options: UseAIChatOptions = {}) {
@@ -49,6 +80,10 @@ export function useAIChat(options: UseAIChatOptions = {}) {
   const [currentConversationId, setCurrentConversationId] = useState<string | undefined>(options.conversationId);
   const [conversationTitle, setConversationTitle] = useState<string | undefined>();
   const abortControllerRef = useRef<AbortController | null>(null);
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
+  const [isWebSearching, setIsWebSearching] = useState(false);
+  const [searchSources, setSearchSources] = useState<Array<{ title: string; url: string; content?: string }>>([]);
 
   // Get available models
   const { data: availableModels, isLoading: modelsLoading } = 
@@ -145,6 +180,13 @@ export function useAIChat(options: UseAIChatOptions = {}) {
       // Add user message
       const userMessage = addMessage("user", content, attachments);
 
+      // Check if web search is enabled
+      if (config.webSearch?.enabled) {
+        setIsWebSearching(true);
+        setSearchSources([]);
+        options.onWebSearchStart?.();
+      }
+
       // Prepare messages array with formatting system prompt
       const defaultSystemPrompt = `You are a helpful AI assistant. When providing code examples, always format them properly using markdown code blocks with language specification.
 
@@ -173,23 +215,38 @@ Format your responses with proper markdown structure including headers, lists, a
       const response = await generateResponse.mutateAsync({
         messages: messagesForAPI,
         config,
+        toolChoice: config.webSearch?.enabled ? { type: 'tool', toolName: 'web_search_preview' } : undefined,
       });
 
       // Add assistant response
       const assistantMessage = addMessage("assistant", response.content);
 
+      // Update search sources if available
+      if (response.sources) {
+        setSearchSources(response.sources);
+      }
+
       // Auto-save conversation
       const finalMessages = [...messages, userMessage, assistantMessage];
       await autoSaveConversation(finalMessages, config);
 
+      if (config.webSearch?.enabled) {
+        setIsWebSearching(false);
+        options.onWebSearchEnd?.();
+      }
+
       return response;
     } catch (error) {
+      if (config.webSearch?.enabled) {
+        setIsWebSearching(false);
+        options.onWebSearchEnd?.();
+      }
       options.onError?.(error as Error);
       throw error;
     }
-  }, [messages, addMessage, generateResponse, autoSaveConversation, options.onError]);
+  }, [messages, addMessage, generateResponse, autoSaveConversation, options]);
 
-  // Send message with simulated streaming response
+  // Send message with streaming response
   const sendMessageStream = useCallback(async (
     content: string,
     config: ChatConfig,
@@ -198,6 +255,13 @@ Format your responses with proper markdown structure including headers, lists, a
     try {
       // Add user message
       const userMessage = addMessage("user", content, attachments);
+
+      // Check if web search is enabled
+      if (config.webSearch?.enabled) {
+        setIsWebSearching(true);
+        setSearchSources([]);
+        options.onWebSearchStart?.();
+      }
 
       // Prepare messages array with formatting system prompt
       const defaultSystemPrompt = `You are a helpful AI assistant. When providing code examples, always format them properly using markdown code blocks with language specification.
@@ -234,6 +298,7 @@ Format your responses with proper markdown structure including headers, lists, a
       const response = await generateResponse.mutateAsync({
         messages: messagesForAPI,
         config,
+        toolChoice: config.webSearch?.enabled ? { type: 'tool', toolName: 'web_search_preview' } : undefined,
       });
 
       // Handle credit usage if available
@@ -244,30 +309,45 @@ Format your responses with proper markdown structure including headers, lists, a
       // Simulate streaming by gradually revealing the content
       const fullContent = response.content;
       let currentContent = '';
+      let lastUpdateTime = Date.now();
+      const minUpdateInterval = 16; // ~60fps
       
       // Stream character by character for more realistic effect
       for (let i = 0; i < fullContent.length; i++) {
         if (abortControllerRef.current?.signal.aborted) {
+          // If aborted, add the partial message and break
+          if (currentContent.trim()) {
+            const assistantMessage = addMessage("assistant", currentContent + " [stopped]");
+            const finalMessages = [...messages, userMessage, assistantMessage];
+            await autoSaveConversation(finalMessages, config);
+          }
           break;
         }
         
         currentContent += fullContent[i];
-        setCurrentStreamContent(currentContent);
+        
+        // Throttle updates to prevent UI jank
+        const now = Date.now();
+        if (now - lastUpdateTime >= minUpdateInterval) {
+          setCurrentStreamContent(currentContent);
+          lastUpdateTime = now;
+        }
         
         // Variable delay based on character type
         const char = fullContent[i] || '';
-        let delay = 20; // base delay
+        let delay = 10; // base delay (faster)
         
-        if (char === '\n') delay = 100; // pause at line breaks
-        else if (char === ' ') delay = 30; // slightly longer for spaces
-        else if (/[.!?]/.test(char)) delay = 200; // pause at sentence endings
-        else if (/[,;:]/.test(char)) delay = 80; // pause at punctuation
+        if (char === '\n') delay = 50; // shorter pause at line breaks
+        else if (char === ' ') delay = 15; // shorter for spaces
+        else if (/[.!?]/.test(char)) delay = 100; // shorter pause at sentence endings
+        else if (/[,;:]/.test(char)) delay = 40; // shorter pause at punctuation
         
         await new Promise(resolve => setTimeout(resolve, delay));
       }
 
-      // Finalize the assistant message
+      // Final update to ensure we show all content
       if (!abortControllerRef.current?.signal.aborted) {
+        setCurrentStreamContent(fullContent);
         const assistantMessage = addMessage("assistant", fullContent);
         
         // Auto-save conversation
@@ -279,21 +359,37 @@ Format your responses with proper markdown structure including headers, lists, a
       setCurrentStreamContent("");
       options.onStreamEnd?.();
 
+      // Update search sources if available in the final response
+      if (response.sources) {
+        setSearchSources(response.sources);
+      }
+
+      if (config.webSearch?.enabled) {
+        setIsWebSearching(false);
+        options.onWebSearchEnd?.();
+      }
+
     } catch (error) {
       setIsStreaming(false);
       setCurrentStreamContent("");
+      if (config.webSearch?.enabled) {
+        setIsWebSearching(false);
+        options.onWebSearchEnd?.();
+      }
       options.onError?.(error as Error);
+    } finally {
+      abortControllerRef.current = null;
     }
   }, [messages, addMessage, generateResponse, autoSaveConversation, options]);
 
-  // Stop streaming
+  // Stop streaming with proper cleanup
   const stopStreaming = useCallback(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
     setIsStreaming(false);
-    setCurrentStreamContent("");
+    // Don't clear currentStreamContent immediately to show partial response
   }, []);
 
   // Clear chat
@@ -361,6 +457,57 @@ Format your responses with proper markdown structure including headers, lists, a
     ));
   }, []);
 
+  // Generate image mutation
+  const generateImage = api.aiChat.generateImage.useMutation({
+    onError: (error) => {
+      options.onError?.(new Error(error.message));
+    },
+  });
+
+  // Generate image function
+  const generateImageResponse = useCallback(async (
+    prompt: string,
+    config: ImageGenerationConfig
+  ) => {
+    try {
+      setIsGeneratingImage(true);
+      setGeneratedImages([]);
+      options.onImageGenerationStart?.();
+
+      const response = await generateImage.mutateAsync({
+        prompt,
+        config,
+      });
+
+      if (response.success && response.images) {
+        setGeneratedImages(response.images);
+        
+        // Add the image generation as a message
+        const imageUrls = response.images.map(img => img.url).join('\n');
+        const messageContent = `Generated images for prompt: "${prompt}"\n\n${imageUrls}`;
+        const imageMessage: Message = {
+          id: `img_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          role: "assistant",
+          content: messageContent,
+          timestamp: new Date(),
+        };
+        addMessage("assistant", messageContent);
+
+        // Auto-save conversation
+        const finalMessages = [...messages, imageMessage];
+        await autoSaveConversation(finalMessages, config);
+      }
+
+      return response;
+    } catch (error) {
+      options.onError?.(error as Error);
+      throw error;
+    } finally {
+      setIsGeneratingImage(false);
+      options.onImageGenerationEnd?.();
+    }
+  }, [messages, addMessage, generateImage, autoSaveConversation, options]);
+
   return {
     // State
     messages,
@@ -373,6 +520,10 @@ Format your responses with proper markdown structure including headers, lists, a
     modelsLoading,
     currentConversationId,
     conversationTitle,
+    isGeneratingImage,
+    generatedImages,
+    isWebSearching,
+    searchSources,
 
     // Actions
     sendMessage,
@@ -385,6 +536,7 @@ Format your responses with proper markdown structure including headers, lists, a
     saveConversationManually,
     deleteMessage,
     editMessage,
+    generateImageResponse,
 
     // Utilities
     getDefaultConfig,
