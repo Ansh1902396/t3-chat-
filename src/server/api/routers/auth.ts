@@ -15,11 +15,14 @@ export const authRouter = createTRPCRouter({
   }),
 
   getUserStats: protectedProcedure.query(async ({ ctx }) => {
-    // This is a placeholder for user stats like plan, credits, etc.
-    // You can enhance this later with actual database queries
+    // Fetch actual user data from database
+    const user = await ctx.db.user.findUnique({
+      where: { id: ctx.session.user.id },
+    });
+
     return {
       plan: "free",
-      credits: 100,
+      credits: (user as any)?.credits ?? 20,
       messagesThisMonth: 0,
       joinedAt: new Date(),
     };

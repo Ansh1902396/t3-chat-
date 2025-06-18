@@ -13,6 +13,8 @@ import { MarkdownRenderer } from "./ui/markdown-renderer"
 import { StreamingMarkdown } from "./ui/streaming-markdown"
 import { FileUpload } from "./ui/file-upload"
 import { FileAttachmentList } from "./ui/file-attachment"
+import { CreditsDisplay } from "./credits-display"
+import { CreditToast } from "./credit-toast"
 import { useAIChat, type ChatConfig, type Message, type ImageGenerationConfig } from "~/hooks/useAIChat"
 import { cn } from "~/lib/utils"
 import { useInView } from "react-intersection-observer"
@@ -157,6 +159,12 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
     url: string;
     cloudinaryId?: string;
   }>>([])
+  const [showCreditToast, setShowCreditToast] = useState(false)
+  const [creditToastData, setCreditToastData] = useState<{
+    creditsUsed: number;
+    creditsRemaining: number;
+    modelName: string;
+  }>({ creditsUsed: 0, creditsRemaining: 0, modelName: '' })
   const inputRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const [isAutoScrolling, setIsAutoScrolling] = useState(true)
@@ -202,6 +210,10 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
     onError: (error) => {
       console.error("AI Chat Error:", error)
       // You could add a toast notification here
+    },
+    onCreditUsed: (creditsUsed, creditsRemaining, modelName) => {
+      setCreditToastData({ creditsUsed, creditsRemaining, modelName });
+      setShowCreditToast(true);
     },
   })
 
@@ -506,6 +518,13 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
+      <CreditToast
+        show={showCreditToast}
+        creditsUsed={creditToastData.creditsUsed}
+        creditsRemaining={creditToastData.creditsRemaining}
+        modelName={creditToastData.modelName}
+        onClose={() => setShowCreditToast(false)}
+      />
       <Sidebar
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen(!sidebarOpen)}
@@ -534,6 +553,9 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
             {conversationTitle || "T3.chat"}
           </h1>
           <div className="flex items-center gap-2">
+            {user && (
+              <CreditsDisplay credits={user.credits} className="text-xs" />
+            )}
             {hasMessages && (
               <Button
                 variant="ghost"
@@ -566,13 +588,9 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                 New Chat
               </Button>
             )}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-all rounded-full"
-            >
-              <span className="text-sm font-bold">$</span>
-            </Button>
+            {user && (
+              <CreditsDisplay credits={user.credits} />
+            )}
             <ThemeToggle />
           </div>
         </div>
@@ -582,7 +600,7 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
           {!hasMessages ? (
             // Welcome Screen
             <div className="flex-1 flex flex-col items-center justify-center p-8 max-w-6xl mx-auto w-full overflow-y-auto custom-scrollbar">
-              <div className="text-center mb-12 w-full animate-fade-in">
+              <div className="text-center mb-12 w-full animate-fade-in-up">
                 <h1 className="text-6xl font-black mb-4 text-balance tracking-tight bg-gradient-to-br from-foreground via-foreground to-muted-foreground bg-clip-text text-transparent">
                   How can I help you{user ? `, ${user.name.split(" ")[0]}` : ""}?
                 </h1>
@@ -594,8 +612,8 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                       key={category.label}
                       variant="outline"
                       className={`flex flex-col items-center gap-4 h-auto p-8 bg-gradient-to-br ${category.color}
-                               hover:bg-muted/40 hover:border-border transition-all duration-300 
-                               card-t3 group animate-fade-in rounded-3xl border-2`}
+                               hover:bg-muted/40 hover:border-border transition-bounce 
+                               card-t3 group animate-bounce-in rounded-3xl border-2 hover-scale`}
                       style={{ animationDelay: `${index * 0.1}s` }}
                     >
                       <category.icon className="h-8 w-8 text-muted-foreground group-hover:text-foreground transition-colors" />
@@ -614,8 +632,8 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
                       key={index}
                       variant="ghost"
                       className="w-full text-left justify-start h-auto p-6 text-muted-foreground 
-                               hover:text-foreground hover:bg-muted/30 rounded-2xl transition-all duration-200 
-                               animate-fade-in group border border-transparent hover:border-border/50"
+                               hover:text-foreground hover:bg-muted/30 rounded-2xl transition-smooth 
+                               animate-slide-up group border border-transparent hover:border-border/50 hover-lift"
                       onClick={() => handleSampleQuestionClick(question)}
                       style={{ animationDelay: `${(index + 4) * 0.1}s` }}
                     >
@@ -874,13 +892,14 @@ export function ChatInterface({ user, onLogout }: ChatInterfaceProps) {
             )}
 
             {/* Message Input */}
-            <div className="relative card-t3 rounded-3xl border-2 border-border/50 shadow-xl">
+            <div className="relative card-t3 rounded-3xl border-2 border-border/50 shadow-xl transition-smooth hover-glow">
               <div className="flex items-center p-5 gap-4">
                 <ModelDropdown 
                   selectedModel={selectedModel} 
                   onModelChange={setSelectedModel} 
                   availableModels={transformedAvailableModels}
                   isLoading={modelsLoading}
+                  userCredits={user?.credits ?? 0}
                 />
 
                 <div className="h-8 w-px bg-border/50" />

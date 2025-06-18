@@ -14,6 +14,7 @@ import { TRPCError } from "@trpc/server";
 import OpenAI from "openai";
 import { env } from "~/env";
 import { db } from "~/server/db";
+import { getModelCost, canAffordModel } from "~/lib/model-costs";
 
 // Re-export types for client use
 export type { AIProvider, AIModelConfig, ImageGenerationRequest, ImageGenerationResponse };
@@ -226,6 +227,28 @@ export const aiChatRouter = createTRPCRouter({
     .input(chatRequestSchema)
     .mutation(async ({ input, ctx }) => {
       try {
+        // Check user credits first
+        const user = await ctx.db.user.findUnique({
+          where: { id: ctx.session.user.id },
+        });
+
+        if (!user) {
+          throw new TRPCError({
+            code: "UNAUTHORIZED",
+            message: "User not found",
+          });
+        }
+
+        const userCredits = (user as any)?.credits ?? 0;
+        const modelCost = getModelCost(input.config.model);
+
+        if (!canAffordModel(userCredits, input.config.model)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: `Insufficient credits. This model requires ${modelCost} credits, but you only have ${userCredits} credits available.`,
+          });
+        }
+
         // Validate the model
         if (!aiModelManager.validateModel(input.config.provider, input.config.model)) {
           throw new TRPCError({
@@ -280,15 +303,62 @@ When using web search, always cite your sources using markdown links: [source ti
           toolChoice: input.toolChoice,
         });
 
-        return {
-          content: response.content,
-          usage: response.usage,
-          finishReason: response.finishReason,
-          sources: response.sources,
-          success: true,
-          provider: input.config.provider,
-          model: input.config.model,
-        };
+        let lastError: Error | null = null;
+
+        // Try each provider in sequence
+        for (const fallback of validFallbacks) {
+          try {
+            const config = {
+              ...input.config,
+              provider: fallback.provider,
+              model: fallback.model,
+            };
+
+            // Generate response
+            const response = await aiModelManager.generateResponse({
+              messages: messages as CoreMessage[],
+              config: config as AIModelConfig,
+            });
+
+            // Deduct credits after successful response
+            await ctx.db.user.update({
+              where: { id: ctx.session.user.id },
+              data: {
+                ...(({ credits: { decrement: modelCost } } as any)),
+              },
+            });
+
+            return {
+              content: response.content,
+              usage: response.usage,
+              finishReason: response.finishReason,
+              success: true,
+              provider: fallback.provider, // Include which provider was actually used
+              model: fallback.model,
+              creditsUsed: modelCost,
+              creditsRemaining: userCredits - modelCost,
+            };
+          } catch (error) {
+            console.error(`Failed with provider ${fallback.provider}:`, error);
+            lastError = error as Error;
+            
+            // If it's a quota/rate limit error, try the next provider immediately
+            if (error instanceof Error && (
+              error.message.includes('quota') || 
+              error.message.includes('rate limit') ||
+              error.message.includes('429')
+            )) {
+              continue;
+            }
+            
+            // For other errors, also try the next provider but log it differently
+            console.log(`Trying next provider due to error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            continue;
+          }
+        }
+
+        // If all providers failed, throw the last error
+        throw lastError || new Error('All providers failed');
       } catch (error) {
         console.error("Error generating AI response:", error);
         
