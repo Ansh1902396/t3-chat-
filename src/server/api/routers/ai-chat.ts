@@ -5,7 +5,9 @@ import {
   isValidProvider,
   type AIProvider,
   type AIModelConfig,
-  AI_PROVIDERS
+  AI_PROVIDERS,
+  type ImageGenerationRequest,
+  type ImageGenerationResponse,
 } from "~/server/lib/ai-model-manager";
 import { getModelCost, hasInsufficientCredits } from "~/lib/model-costs";
 import type { CoreMessage } from "ai";
@@ -13,6 +15,31 @@ import { TRPCError } from "@trpc/server";
 import OpenAI from "openai";
 import { env } from "~/env";
 import { db } from "~/server/db";
+
+// Server-side model provider utility functions
+function getProviderFromModel(modelId: string): AIProvider {
+  // OpenAI models
+  if (modelId.includes("gpt") || modelId.includes("dall-e") || modelId.includes("o4")) {
+    return AI_PROVIDERS.OPENAI
+  }
+  
+  // Anthropic models
+  if (modelId.includes("claude")) {
+    return AI_PROVIDERS.ANTHROPIC
+  }
+  
+  // Google models
+  if (modelId.includes("gemini")) {
+    return AI_PROVIDERS.GOOGLE
+  }
+  
+  // Default fallback
+  return AI_PROVIDERS.GOOGLE
+}
+
+function validateModelProvider(modelId: string, provider: AIProvider): boolean {
+  return getProviderFromModel(modelId) === provider
+}
 
 // Validation schemas
 const attachmentSchema = z.object({
@@ -46,6 +73,17 @@ const chatRequestSchema = z.object({
   messages: z.array(messageSchema).min(1),
   config: aiConfigSchema,
   conversationId: z.string().optional(),
+});
+
+// Add image generation schema
+const imageGenerationSchema = z.object({
+  prompt: z.string().min(1).max(1000),
+  config: aiConfigSchema.extend({
+    size: z.enum(['256x256', '512x512', '1024x1024', '1024x1792', '1792x1024']).optional(),
+    quality: z.enum(['standard', 'hd']).optional(),
+    style: z.enum(['vivid', 'natural']).optional(),
+    n: z.number().min(1).max(4).optional(),
+  }),
 });
 
 // Helper function to generate conversation title from first message
@@ -223,6 +261,15 @@ export const aiChatRouter = createTRPCRouter({
           });
         }
 
+        // Additional validation: ensure model belongs to the correct provider
+        if (!validateModelProvider(input.config.model, input.config.provider)) {
+          const correctProvider = getProviderFromModel(input.config.model);
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Model ${input.config.model} belongs to ${correctProvider}, not ${input.config.provider}. Please use the correct provider.`,
+          });
+        }
+
         // Add system prompt for proper formatting
         const systemPrompt = {
           role: "system" as const,
@@ -374,6 +421,16 @@ Format your responses with proper markdown structure including headers, lists, a
           yield {
             type: "error" as const,
             message: `Invalid model ${input.config.model} for provider ${input.config.provider}`,
+          };
+          return;
+        }
+
+        // Additional validation: ensure model belongs to the correct provider
+        if (!validateModelProvider(input.config.model, input.config.provider)) {
+          const correctProvider = getProviderFromModel(input.config.model);
+          yield {
+            type: "error" as const,
+            message: `Model ${input.config.model} belongs to ${correctProvider}, not ${input.config.provider}. Please use the correct provider.`,
           };
           return;
         }
@@ -758,7 +815,97 @@ Format your responses with proper markdown structure including headers, lists, a
         });
       }
     }),
+
+  // Generate image
+  generateImage: protectedProcedure
+    .input(imageGenerationSchema)
+    .mutation(async ({ input, ctx }) => {
+      try {
+        // Check user credits first
+        const user = await db.user.findUnique({
+          where: { id: ctx.session.user.id },
+          select: { credits: true },
+        });
+
+        if (!user) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "User not found",
+          });
+        }
+
+        // Check if user has sufficient credits for the model
+        if (hasInsufficientCredits(user.credits, input.config.model)) {
+          const { cost } = getModelCost(input.config.model);
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Insufficient credits. You need ${cost} credits but only have ${user.credits}.`,
+          });
+        }
+
+        // Only allow OpenAI DALL-E models for now
+        if (input.config.provider !== AI_PROVIDERS.OPENAI || !input.config.model.startsWith('dall-e')) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Image generation is currently only supported with OpenAI DALL-E models",
+          });
+        }
+
+        // Validate the model
+        if (!aiModelManager.validateModel(input.config.provider, input.config.model)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Invalid model ${input.config.model} for provider ${input.config.provider}`,
+          });
+        }
+
+        // Generate image with OpenAI DALL-E
+        const response = await aiModelManager.generateImage({
+          prompt: input.prompt,
+          config: input.config,
+        });
+
+        // Get the actual cost to deduct
+        const { cost } = getModelCost(input.config.model);
+
+        // Deduct credits after successful generation
+        await db.user.update({
+          where: { id: ctx.session.user.id },
+          data: { credits: { decrement: cost } },
+        });
+
+        return {
+          images: response.images,
+          usage: response.usage,
+          success: true,
+          provider: AI_PROVIDERS.OPENAI,
+          model: input.config.model,
+          creditsUsed: cost,
+        };
+      } catch (error) {
+        console.error("Error generating image:", error);
+        
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        
+        // Provide more helpful error message
+        const errorMessage = error instanceof Error ? error.message : "Failed to generate image";
+        const isQuotaError = errorMessage.includes('quota') || errorMessage.includes('rate limit');
+        
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: isQuotaError 
+            ? "AI service temporarily unavailable due to high demand. Please try again in a few minutes."
+            : errorMessage,
+        });
+      }
+    }),
 });
+
+// Re-export types for client use
+export type { AIProvider, AIModelConfig, ImageGenerationRequest, ImageGenerationResponse };
+export { AI_PROVIDERS };
 
 // Export types for frontend use
 export type AIChatRouter = typeof aiChatRouter; 

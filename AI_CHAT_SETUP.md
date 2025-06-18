@@ -1,106 +1,21 @@
 # AI Chat System Setup Guide
 
-This document explains how to set up and use the multi-model AI chat system in your T3 app.
+## Overview
+This guide covers the setup and usage of the AI chat system with support for multiple providers (OpenAI, Anthropic, Google) and image generation capabilities.
 
 ## Features
+- ✅ Multi-provider AI chat (OpenAI GPT, Anthropic Claude, Google Gemini)
+- ✅ Real-time streaming responses
+- ✅ Web search integration (OpenAI models only)
+- ✅ Credit system with model-based pricing
+- ✅ **Image generation with DALL-E** 
+- ✅ Conversation persistence and management
+- ✅ File attachments support
+- ✅ Markdown rendering with syntax highlighting
 
-- **Multiple AI Providers**: Support for OpenAI (GPT), Anthropic (Claude), and Google (Gemini)
-- **Model Selection**: Choose from various models within each provider
-- **Streaming Responses**: Real-time streaming of AI responses
-- **Type-Safe**: Full TypeScript support with tRPC
-- **Reusable**: Clean architecture with manager pattern
-- **Configurable**: Adjustable parameters like temperature, max tokens, etc.
+## Quick Start
 
-## Setup
-
-### 1. Install Dependencies
-
-First, install the required packages:
-
-```bash
-npm install ai @ai-sdk/openai @ai-sdk/anthropic @ai-sdk/google
-```
-
-### 2. Environment Variables
-
-Add the following environment variables to your `.env.local` file. You only need to add the API keys for the providers you want to use:
-
-```env
-# OpenAI API Key (for GPT models)
-OPENAI_API_KEY=sk-your_openai_api_key_here
-
-# Anthropic API Key (for Claude models)
-ANTHROPIC_API_KEY=sk-ant-your_anthropic_api_key_here
-
-# Google Generative AI API Key (for Gemini models)
-GOOGLE_GENERATIVE_AI_API_KEY=your_google_ai_api_key_here
-```
-
-### 3. Get API Keys
-
-#### OpenAI (GPT)
-1. Go to [OpenAI Platform](https://platform.openai.com/)
-2. Create an account or sign in
-3. Navigate to API Keys section
-4. Create a new API key
-
-#### Anthropic (Claude)
-1. Go to [Anthropic Console](https://console.anthropic.com/)
-2. Create an account or sign in
-3. Navigate to API Keys section
-4. Create a new API key
-
-#### Google (Gemini)
-1. Go to [Google AI Studio](https://aistudio.google.com/)
-2. Create an account or sign in
-3. Navigate to API Keys section
-4. Create a new API key
-
-## Usage
-
-### Frontend Integration
-
-Here's how to use the AI chat system in your React components:
-
-```typescript
-import { api } from "~/trpc/react";
-
-function ChatComponent() {
-  const { data: availableModels } = api.aiChat.getAvailableModels.useQuery();
-  const generateResponse = api.aiChat.generateResponse.useMutation();
-
-  const handleSendMessage = async (message: string) => {
-    try {
-      const response = await generateResponse.mutateAsync({
-        messages: [
-          { role: "user", content: message }
-        ],
-        config: {
-          provider: "openai", // or "anthropic" or "google"
-          model: "gpt-4o", // or any available model
-          temperature: 0.7,
-          maxTokens: 1000,
-        }
-      });
-      
-      console.log("AI Response:", response.content);
-    } catch (error) {
-      console.error("Error:", error);
-    }
-  };
-
-  return (
-    <div>
-      {/* Your chat UI here */}
-    </div>
-  );
-}
-```
-
-### Using the Custom Hook
-
-The easiest way to use the AI chat system is with the provided hook:
-
+### Basic Chat Usage
 ```typescript
 import { useAIChat } from "~/hooks/useAIChat";
 
@@ -108,60 +23,197 @@ function ChatComponent() {
   const {
     messages,
     isStreaming,
-    currentStreamContent,
-    sendMessage,
     sendMessageStream,
-    clearChat,
-    availableModels,
-  } = useAIChat({
-    onError: (error) => console.error("Chat error:", error),
-    onStreamStart: () => console.log("Streaming started"),
-    onStreamEnd: () => console.log("Streaming ended"),
-  });
+    clearChat
+  } = useAIChat();
 
-  const handleSendMessage = async () => {
-    const config = {
-      provider: "openai" as const,
-      model: "gpt-4o",
-      temperature: 0.7,
-      maxTokens: 1000,
-    };
+  const handleSend = (message: string) => {
+    sendMessageStream(message, {
+      provider: "openai",
+      model: "gpt-4o-mini",
+      temperature: 0.7
+    });
+  };
 
-    // For streaming response
-    sendMessageStream("Hello, how are you?", config);
+  return <div>Your chat UI here</div>;
+}
+```
 
-    // Or for non-streaming response
-    // await sendMessage("Hello, how are you?", config);
+### **Image Generation with DALL-E**
+```typescript
+import { api } from "~/trpc/react";
+
+function ImageGenerationComponent() {
+  const generateImage = api.aiChat.generateImage.useMutation();
+
+  const handleGenerateImage = async () => {
+    try {
+      const result = await generateImage.mutateAsync({
+        prompt: "A beautiful sunset over mountains with vibrant colors",
+        config: {
+          provider: "openai",      // ✅ Must be OpenAI
+          model: "dall-e-3",       // ✅ Use dall-e-3 or dall-e-2
+          size: "1024x1024",       // Optional: 256x256, 512x512, 1024x1024, etc.
+          quality: "hd",           // Optional: standard, hd
+          style: "vivid",          // Optional: vivid, natural
+          n: 1                     // Optional: 1-4 images
+        }
+      });
+
+      console.log("Generated images:", result.images);
+      console.log("Credits used:", result.creditsUsed);
+    } catch (error) {
+      console.error("Image generation failed:", error);
+    }
+  };
+
+  return (
+    <button onClick={handleGenerateImage}>
+      Generate Image (5 credits)
+    </button>
+  );
+}
+```
+
+### **Using Image Generation in Chat Hook**
+```typescript
+import { useAIChat } from "~/hooks/useAIChat";
+
+function ImageChatComponent() {
+  const {
+    generateImageResponse,
+    isGeneratingImage,
+    generatedImages
+  } = useAIChat();
+
+  const handleImageGeneration = async () => {
+    try {
+      await generateImageResponse("A futuristic city at night", {
+        provider: "openai",
+        model: "dall-e-3",
+        size: "1024x1024",
+        quality: "hd"
+      });
+    } catch (error) {
+      console.error("Failed to generate image:", error);
+    }
   };
 
   return (
     <div>
-      <div>
-        {messages.map((message) => (
-          <div key={message.id}>
-            <strong>{message.role}:</strong> {message.content}
-          </div>
-        ))}
-        {isStreaming && (
-          <div>
-            <strong>assistant:</strong> {currentStreamContent}
-          </div>
-        )}
-      </div>
-      <button onClick={handleSendMessage}>Send Message</button>
-      <button onClick={clearChat}>Clear Chat</button>
+      <button 
+        onClick={handleImageGeneration} 
+        disabled={isGeneratingImage}
+      >
+        {isGeneratingImage ? "Generating..." : "Create Image"}
+      </button>
+      
+      {generatedImages.map((img, index) => (
+        <img key={index} src={img.url} alt="Generated" />
+      ))}
     </div>
   );
 }
 ```
 
-### Manual tRPC Usage
+## Model Types & Costs
 
-You can also use tRPC directly if you need more control:
+### **Text Models** (for chat)
+| Model | Provider | Cost | Description |
+|-------|----------|------|-------------|
+| `gpt-4o-mini` | OpenAI | 1 credit | Fast & efficient |
+| `gpt-3.5-turbo` | OpenAI | 1 credit | Cost-effective |
+| `gpt-4o` | OpenAI | 3 credits | Most capable |
+| `claude-3-5-haiku` | Anthropic | 1 credit | Fast Claude |
+| `claude-3-5-sonnet` | Anthropic | 3 credits | Best Claude |
+| `gemini-1.5-flash` | Google | 1 credit | Fast Gemini |
+| `gemini-1.5-pro` | Google | 3 credits | Advanced Gemini |
 
+### **Image Models** (for generation only)
+| Model | Provider | Cost | Description |
+|-------|----------|------|-------------|
+| `dall-e-2` | OpenAI | 5 credits | Fast image generation |
+| `dall-e-3` | OpenAI | 5 credits | High-quality images |
+
+## ⚠️ **Important Notes for Image Generation**
+
+### **DALL-E Models Cannot Be Used for Text Chat**
 ```typescript
-import { api } from "~/trpc/react";
+// ❌ This will fail - DALL-E is for images only
+sendMessage("Hello", {
+  provider: "openai",
+  model: "dall-e-3"  // ERROR: Image model in text endpoint
+});
 
+// ✅ Correct usage - Use dedicated image endpoint
+generateImage.mutate({
+  prompt: "A beautiful landscape",
+  config: {
+    provider: "openai",
+    model: "dall-e-3"
+  }
+});
+```
+
+### **Provider Requirements**
+- **Text Chat**: Use `gpt-4o`, `claude-3-5-sonnet`, `gemini-1.5-flash`, etc.
+- **Image Generation**: Only OpenAI DALL-E models (`dall-e-2`, `dall-e-3`)
+- **Web Search**: Only OpenAI models support web search
+
+## API Endpoints
+
+### Chat Endpoints
+- `aiChat.generateResponse`: Single response (non-streaming)
+- `aiChat.streamResponse`: Real-time streaming response
+
+### **Image Generation Endpoint**
+- `aiChat.generateImage`: Generate images with DALL-E
+
+### Model Management
+- `aiChat.getAvailableModels`: Get all available models by provider
+- `aiChat.validateModel`: Check if model is valid for provider
+
+## Environment Variables
+```bash
+# Required for each provider you want to use
+OPENAI_API_KEY=sk-...                    # For GPT models and DALL-E
+ANTHROPIC_API_KEY=sk-ant-...             # For Claude models  
+GOOGLE_GENERATIVE_AI_API_KEY=...         # For Gemini models
+
+# Database
+DATABASE_URL=postgresql://...
+
+# NextAuth
+NEXTAUTH_SECRET=...
+NEXTAUTH_URL=http://localhost:3000
+```
+
+## Error Handling
+
+### **Common Image Generation Errors**
+```typescript
+try {
+  await generateImage.mutateAsync({...});
+} catch (error) {
+  if (error.message.includes("Insufficient credits")) {
+    // User needs more credits
+  } else if (error.message.includes("belongs to")) {
+    // Wrong provider for model
+  } else if (error.message.includes("rate limit")) {
+    // API rate limit hit
+  }
+}
+```
+
+### **Model Validation Errors**
+- `"Model dall-e-3 belongs to openai, not google"` → Use correct provider
+- `"Invalid model dall-e-3 for provider anthropic"` → DALL-E only works with OpenAI
+- `"Model dall-e-3 is an image generation model"` → Use image endpoint, not chat
+
+## Advanced Usage
+
+### Streaming with Error Handling
+```typescript
 function ChatComponent() {
   // For streaming responses
   const streamSubscription = api.aiChat.streamResponse.useSubscription(
@@ -190,6 +242,61 @@ function ChatComponent() {
 }
 ```
 
+### **Complete Image Generation Example**
+```typescript
+import { useState } from "react";
+import { api } from "~/trpc/react";
+
+function ImageGenerator() {
+  const [prompt, setPrompt] = useState("");
+  const [images, setImages] = useState<Array<{url: string}>>([]);
+  
+  const generateImage = api.aiChat.generateImage.useMutation({
+    onSuccess: (result) => {
+      setImages(result.images);
+    },
+    onError: (error) => {
+      alert(`Error: ${error.message}`);
+    }
+  });
+
+  const handleGenerate = () => {
+    generateImage.mutate({
+      prompt,
+      config: {
+        provider: "openai",
+        model: "dall-e-3",
+        size: "1024x1024",
+        quality: "hd",
+        style: "vivid"
+      }
+    });
+  };
+
+  return (
+    <div>
+      <input 
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        placeholder="Describe the image you want..."
+      />
+      <button 
+        onClick={handleGenerate}
+        disabled={generateImage.isPending}
+      >
+        {generateImage.isPending ? "Generating..." : "Generate Image (5 credits)"}
+      </button>
+      
+      <div>
+        {images.map((img, i) => (
+          <img key={i} src={img.url} alt={`Generated ${i}`} />
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
 ## Available Models
 
 ### OpenAI (GPT)
@@ -208,6 +315,10 @@ function ChatComponent() {
 - `gemini-1.5-flash`: Fast and efficient Gemini
 - `gemini-pro`: Previous generation Gemini
 
+### **OpenAI (DALL-E) - Image Generation Only**
+- `dall-e-3`: High-quality image generation
+- `dall-e-2`: Fast image generation
+
 ## Configuration Options
 
 Each request can include the following configuration options:
@@ -225,57 +336,58 @@ interface AIModelConfig {
 }
 ```
 
+### **Image Generation Config**
+```typescript
+interface ImageGenerationConfig extends AIModelConfig {
+  size?: '256x256' | '512x512' | '1024x1024' | '1024x1792' | '1792x1024';
+  quality?: 'standard' | 'hd';
+  style?: 'vivid' | 'natural';
+  n?: number; // 1-4 images
+}
+```
+
 ## API Endpoints
 
 ### tRPC Procedures
 
 - `aiChat.getAvailableModels`: Get all available providers and models
 - `aiChat.getDefaultConfig`: Get default configuration for a provider
-- `aiChat.validateModel`: Validate if a model is available
-- `aiChat.generateResponse`: Generate a single response (mutation)
-- `aiChat.streamResponse`: Stream responses in real-time (subscription)
-- `aiChat.saveConversation`: Save conversation to database (placeholder)
-- `aiChat.getConversationHistory`: Get conversation history (placeholder)
-- `aiChat.listConversations`: List user conversations (placeholder)
-- `aiChat.deleteConversation`: Delete a conversation (placeholder)
-
-## Error Handling
-
-The system includes comprehensive error handling:
-
-- Invalid API keys
-- Model not available
-- Rate limiting
-- Network errors
-- Invalid request format
-
-## Best Practices
-
-1. **API Key Security**: Never expose API keys in client-side code
-2. **Rate Limiting**: Implement rate limiting to prevent abuse
-3. **Error Handling**: Always handle errors gracefully
-4. **Token Management**: Monitor token usage to control costs
-5. **Model Selection**: Choose appropriate models based on your use case
-
-## Extending the System
-
-To add new providers:
-
-1. Install the provider's SDK
-2. Add it to the `AIModelManager` class
-3. Update the `AI_PROVIDERS` and `AI_MODELS` constants
-4. Add environment variables for the API key
-5. Update the validation schemas
+- `aiChat.validateModel`: Validate if a model is available for a provider
+- `aiChat.generateResponse`: Generate a single AI response
+- `aiChat.streamResponse`: Stream AI response in real-time
+- **`aiChat.generateImage`**: Generate images with DALL-E ✨
+- `aiChat.saveConversation`: Save conversation to database
+- `aiChat.getConversationHistory`: Load conversation history
+- `aiChat.listConversations`: List user's conversations
+- `aiChat.deleteConversation`: Delete a conversation
+- `aiChat.updateConversationTitle`: Update conversation title
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **"Provider not configured"**: Check if the API key is set in environment variables
-2. **"Invalid model"**: Verify the model name is correct for the provider
-3. **Rate limiting**: Implement exponential backoff for retries
-4. **CORS errors**: Ensure proper CORS configuration for streaming endpoints
+1. **Model Not Available**: Check if you have the API key for the provider
+2. **Rate Limits**: The system includes automatic retry with exponential backoff
+3. **Invalid Configuration**: Use `aiChat.validateModel` to check model availability
 
-### Debug Mode
+### **Image Generation Issues**
 
-Enable debug logging by setting `NODE_ENV=development` in your environment variables. 
+1. **"You are not allowed to sample from this model"**
+   - ✅ **Fixed**: Use the dedicated `generateImage` endpoint
+   - ❌ Don't try to use DALL-E models in regular chat
+
+2. **"Model dall-e-3 belongs to openai, not google"**
+   - ✅ Always use `provider: "openai"` with DALL-E models
+
+3. **"Insufficient credits"**
+   - Image generation costs 5 credits
+   - Check user credit balance before generating
+
+### Performance Tips
+
+- Use `gpt-4o-mini` or `gemini-1.5-flash` for faster, cheaper responses
+- Enable streaming for better user experience
+- Use appropriate `maxTokens` limits to control costs
+- For images, `dall-e-2` is faster but `dall-e-3` has better quality
+
+This setup provides a complete AI chat system with robust error handling, multiple provider support, and comprehensive image generation capabilities! 

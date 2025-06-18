@@ -33,6 +33,25 @@ export interface ChatConfig {
   frequencyPenalty?: number;
 }
 
+// Add image generation config interface
+export interface ImageGenerationConfig {
+  provider: AIProvider;
+  model: string;
+  size?: '256x256' | '512x512' | '1024x1024' | '1024x1792' | '1792x1024';
+  quality?: 'standard' | 'hd';
+  style?: 'vivid' | 'natural';
+  n?: number;
+}
+
+// Add generated image interface
+export interface GeneratedImage {
+  url: string;
+  revisedPrompt?: string;
+  timestamp: Date;
+  prompt: string;
+  config: ImageGenerationConfig;
+}
+
 export interface UseAIChatOptions {
   defaultConfig?: Partial<ChatConfig>;
   onError?: (error: Error) => void;
@@ -48,6 +67,11 @@ export function useAIChat(options: UseAIChatOptions = {}) {
   const [currentStreamContent, setCurrentStreamContent] = useState("");
   const [currentConversationId, setCurrentConversationId] = useState<string | undefined>(options.conversationId);
   const [conversationTitle, setConversationTitle] = useState<string | undefined>();
+  
+  // Add image generation state
+  const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // Get available models
@@ -368,6 +392,56 @@ Format your responses with proper markdown structure including headers, lists, a
     ));
   }, []);
 
+  // Add image generation mutation
+  const generateImageMutation = api.aiChat.generateImage.useMutation({
+    onMutate: () => {
+      setIsGeneratingImage(true);
+    },
+    onSuccess: (result, variables) => {
+      const newImages: GeneratedImage[] = result.images.map(img => ({
+        url: img.url,
+        revisedPrompt: img.revisedPrompt,
+        timestamp: new Date(),
+        prompt: variables.prompt,
+        config: variables.config as ImageGenerationConfig,
+      }));
+      
+      setGeneratedImages(prev => [...prev, ...newImages]);
+      setIsGeneratingImage(false);
+      
+      // Notify about credit update
+      setTimeout(() => {
+        options.onCreditsUpdated?.();
+      }, 500);
+    },
+    onError: (error) => {
+      setIsGeneratingImage(false);
+      options.onError?.(new Error(error.message));
+    },
+  });
+
+  // Generate image response function
+  const generateImageResponse = useCallback(async (
+    prompt: string,
+    config: ImageGenerationConfig
+  ) => {
+    try {
+      const result = await generateImageMutation.mutateAsync({
+        prompt,
+        config,
+      });
+      return result;
+    } catch (error) {
+      options.onError?.(error as Error);
+      throw error;
+    }
+  }, [generateImageMutation, options.onError]);
+
+  // Clear generated images
+  const clearGeneratedImages = useCallback(() => {
+    setGeneratedImages([]);
+  }, []);
+
   return {
     // State
     messages,
@@ -380,6 +454,8 @@ Format your responses with proper markdown structure including headers, lists, a
     modelsLoading,
     currentConversationId,
     conversationTitle,
+    generatedImages,
+    isGeneratingImage,
 
     // Actions
     sendMessage,
@@ -392,8 +468,11 @@ Format your responses with proper markdown structure including headers, lists, a
     saveConversationManually,
     deleteMessage,
     editMessage,
+    generateImageResponse,
+    clearGeneratedImages,
 
     // Utilities
     getDefaultConfig,
+    generateImageMutation,
   };
 } 

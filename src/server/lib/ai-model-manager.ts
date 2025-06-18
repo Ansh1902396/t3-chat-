@@ -264,6 +264,11 @@ export class AIModelManager {
     const { messages, config, toolChoice } = request;
     const { provider, model, webSearch, ...params } = config;
 
+    // Prevent image models from being used for text generation
+    if (model.startsWith('dall-e')) {
+      throw new Error(`Model ${model} is an image generation model and cannot be used for text generation. Please use the image generation endpoint instead.`);
+    }
+
     const client = this.getProviderClient(provider);
     const modelId = this.buildModelIdentifier(provider, model);
 
@@ -361,6 +366,11 @@ export class AIModelManager {
   public async *generateStreamResponse(request: ChatRequest): AsyncGenerator<string, void, unknown> {
     const { messages, config } = request;
     const { provider, model, ...params } = config;
+
+    // Prevent image models from being used for text generation
+    if (model.startsWith('dall-e')) {
+      throw new Error(`Model ${model} is an image generation model and cannot be used for text generation. Please use the image generation endpoint instead.`);
+    }
 
     const client = this.getProviderClient(provider);
     const modelId = this.buildModelIdentifier(provider, model);

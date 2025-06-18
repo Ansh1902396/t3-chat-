@@ -8,13 +8,18 @@ import { Input } from "~/components/ui/input"
 import { Sidebar } from "./sidebar"
 import { ModelDropdown } from "./model-dropdown"
 import { ThemeToggle } from "./theme-toggle"
-import { Menu, Sparkles, Search, Code, GraduationCap, Paperclip, ArrowUp, User, Bot, X } from "lucide-react"
+import { Menu, Sparkles, Search, Code, GraduationCap, Paperclip, ArrowUp, User, Bot, X, Image, Settings } from "lucide-react"
 import { MarkdownRenderer } from "./ui/markdown-renderer"
 import { StreamingMarkdown } from "./ui/streaming-markdown"
 import { FileUpload } from "./ui/file-upload"
 import { FileAttachmentList } from "./ui/file-attachment"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogPortal, DialogOverlay } from "./ui/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select"
+import { Badge } from "./ui/badge"
+import { GeneratedImage } from "./ui/generated-image"
 import { useAIChat, type ChatConfig } from "~/hooks/useAIChat"
 import { cn } from "~/lib/utils"
+import { getProviderFromModel as getModelProvider } from "~/lib/model-provider-utils"
 
 interface User {
   id: string
@@ -60,6 +65,7 @@ const categoryButtons = [
 
 const sampleQuestions = [
   "How does AI work?",
+  "/image a futuristic robot writing code",
   "Are black holes real?",
   'How many Rs are in the word "strawberry"?',
   "What is the meaning of life?",
@@ -72,6 +78,12 @@ export function ChatInterface({ user, onLogout, onCreditsUpdated }: ChatInterfac
   const [selectedModel, setSelectedModel] = useState("gemini-1.5-flash")
   const [currentConversationId, setCurrentConversationId] = useState<string | undefined>()
   const [showFileUpload, setShowFileUpload] = useState(false)
+  const [showImageModal, setShowImageModal] = useState(false)
+  const [imagePrompt, setImagePrompt] = useState("")
+  const [selectedImageModel, setSelectedImageModel] = useState<"dall-e-2" | "dall-e-3">("dall-e-3")
+  const [imageSize, setImageSize] = useState<"256x256" | "512x512" | "1024x1024" | "1024x1792" | "1792x1024">("1024x1024")
+  const [imageQuality, setImageQuality] = useState<"standard" | "hd">("hd")
+  const [imageStyle, setImageStyle] = useState<"vivid" | "natural">("vivid")
   const [attachedFiles, setAttachedFiles] = useState<Array<{
     id: string;
     fileName: string;
@@ -98,6 +110,11 @@ export function ChatInterface({ user, onLogout, onCreditsUpdated }: ChatInterfac
     loadConversation,
     conversationTitle,
     currentConversationId: hookConversationId,
+    generateImageResponse,
+    isGeneratingImage,
+    generatedImages,
+    addMessage,
+    clearGeneratedImages,
   } = useAIChat({
     conversationId: currentConversationId,
     onError: (error) => {
@@ -120,12 +137,17 @@ export function ChatInterface({ user, onLogout, onCreditsUpdated }: ChatInterfac
   // Transform availableModels data structure for the dropdown
   const transformedAvailableModels = availableModels ? 
     Object.entries(availableModels.models).flatMap(([provider, models]) =>
-      Object.entries(models).map(([modelId, modelData]) => ({
-        id: modelId,
-        name: modelData.name,
-        provider: provider,
-        available: true // All models returned from API are available
-      }))
+      Object.entries(models)
+        .filter(([modelId, modelData]) => {
+          // Filter out image models (DALL-E) from text chat interface
+          return modelData.type !== 'image' && !modelId.includes('dall-e');
+        })
+        .map(([modelId, modelData]) => ({
+          id: modelId,
+          name: modelData.name,
+          provider: provider,
+          available: true // All models returned from API are available
+        }))
     ) : undefined
 
   // Auto-select first available model if current selection is not available
@@ -143,6 +165,11 @@ export function ChatInterface({ user, onLogout, onCreditsUpdated }: ChatInterfac
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages, currentStreamContent])
 
+  // Debug generated images
+  useEffect(() => {
+    console.log('Generated images updated:', generatedImages);
+  }, [generatedImages])
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "/" && !e.ctrlKey && !e.metaKey && e.target !== inputRef.current) {
@@ -157,6 +184,23 @@ export function ChatInterface({ user, onLogout, onCreditsUpdated }: ChatInterfac
 
   const handleSendMessage = () => {
     if ((!message.trim() && attachedFiles.length === 0) || isStreaming || isGenerating) return
+    
+    // Check for /image command
+    if (message.trim().startsWith('/image')) {
+      const promptText = message.trim().substring(6).trim(); // Remove '/image' and trim
+      if (promptText) {
+        setImagePrompt(promptText);
+        setShowImageModal(true);
+        setMessage("");
+        return;
+      } else {
+        // Show modal to enter prompt
+        setImagePrompt("");
+        setShowImageModal(true);
+        setMessage("");
+        return;
+      }
+    }
     
     const config: ChatConfig = {
       provider: getProviderFromModel(selectedModel),
@@ -194,7 +238,19 @@ export function ChatInterface({ user, onLogout, onCreditsUpdated }: ChatInterfac
 
   const handleSampleQuestionClick = (question: string) => {
     setMessage(question)
-    // Auto-send the sample question
+    
+    // Check if it's an image command
+    if (question.trim().startsWith('/image')) {
+      const promptText = question.trim().substring(6).trim(); // Remove '/image' and trim
+      if (promptText) {
+        setImagePrompt(promptText);
+        setShowImageModal(true);
+        setMessage("");
+        return;
+      }
+    }
+    
+    // Auto-send the sample question for regular text
     setTimeout(() => {
       const config: ChatConfig = {
         provider: getProviderFromModel(selectedModel),
@@ -237,13 +293,36 @@ export function ChatInterface({ user, onLogout, onCreditsUpdated }: ChatInterfac
     window.open(file.url, '_blank');
   };
 
+  const handleImageGeneration = async () => {
+    if (!imagePrompt.trim() || !user) return;
+
+    const config = {
+      provider: "openai" as const,
+      model: selectedImageModel,
+      size: imageSize,
+      ...(selectedImageModel === "dall-e-3" && {
+        quality: imageQuality,
+        style: imageStyle,
+      }),
+    };
+
+    try {
+      // Add user message for the image request
+      addMessage("user", `/image ${imagePrompt}`);
+      
+      await generateImageResponse(imagePrompt, config);
+      setShowImageModal(false);
+      setImagePrompt("");
+    } catch (error) {
+      console.error('Failed to generate image:', error);
+      // Error handling is done in the hook
+    }
+  };
+
   // Helper function to determine provider from model name
-  const getProviderFromModel = (modelId: string) => {
-    if (modelId.includes("gemini")) return "google" as const
-    if (modelId.includes("gpt") || modelId.includes("o4")) return "openai" as const
-    if (modelId.includes("claude")) return "anthropic" as const
-    if (modelId.includes("deepseek")) return "openai" as const // assuming OpenAI compatible
-    return "google" as const // default
+  const getProviderFromModel = (modelId: string): "openai" | "anthropic" | "google" => {
+    // Use the robust utility function that properly handles DALL-E models
+    return getModelProvider(modelId) as "openai" | "anthropic" | "google"
   }
 
   // Handle conversation selection from sidebar
@@ -257,6 +336,7 @@ export function ChatInterface({ user, onLogout, onCreditsUpdated }: ChatInterfac
   const handleNewChat = () => {
     setCurrentConversationId(undefined)
     startNewConversation()
+    clearGeneratedImages() // Clear images when starting new chat
     setSidebarOpen(false) // Close sidebar on mobile
   }
 
@@ -449,6 +529,55 @@ export function ChatInterface({ user, onLogout, onCreditsUpdated }: ChatInterfac
                     </div>
                   </div>
                 )}
+
+                {/* Generated Images */}
+                {generatedImages.length > 0 && (
+                  <div className="space-y-4">
+                    {generatedImages.map((image, index) => (
+                      <div key={index} className="flex gap-4 group justify-start">
+                        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center">
+                          <Bot className="h-4 w-4 text-primary" />
+                        </div>
+                        <div className="max-w-[80%] rounded-2xl text-sm bg-muted/50 overflow-hidden">
+                          <div className="p-4">
+                            <div className="mb-3">
+                              <div className="text-sm text-muted-foreground mb-2">
+                                Generated image for: <span className="font-medium">{image.prompt}</span>
+                              </div>
+                              {image.revisedPrompt && image.revisedPrompt !== image.prompt && (
+                                <div className="text-xs text-muted-foreground/80 mb-2">
+                                  Revised: {image.revisedPrompt}
+                                </div>
+                              )}
+                            </div>
+                            <GeneratedImage 
+                              url={image.url}
+                              prompt={image.revisedPrompt || image.prompt}
+                            />
+                            <div className="text-xs opacity-60 mt-3 pt-2 border-t border-border/20">
+                              {image.timestamp.toLocaleTimeString()}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Image Generation Loading */}
+                {isGeneratingImage && (
+                  <div className="flex gap-4 group justify-start">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center">
+                      <Bot className="h-4 w-4 text-primary animate-pulse" />
+                    </div>
+                    <div className="max-w-[80%] rounded-2xl text-sm bg-muted/50 overflow-hidden">
+                      <div className="p-4 flex items-center gap-3">
+                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
+                        <span className="text-muted-foreground">Generating image...</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 <div ref={messagesEndRef} />
               </div>
             </div>
@@ -541,10 +670,12 @@ export function ChatInterface({ user, onLogout, onCreditsUpdated }: ChatInterfac
                   <Paperclip className="h-4 w-4" />
                 </Button>
 
+
+
                 <div className="flex-1 relative">
                   <Input
                     ref={inputRef}
-                    placeholder="Type your message here..."
+                    placeholder="Type your message here or use /image for DALL-E generation..."
                     value={message}
                     onChange={(e) => setMessage(e.target.value)}
                     onKeyPress={handleKeyPress}
@@ -594,6 +725,152 @@ export function ChatInterface({ user, onLogout, onCreditsUpdated }: ChatInterfac
             </div>
           </div>
         </div>
+
+        {/* Image Generation Modal */}
+        <Dialog open={showImageModal} onOpenChange={setShowImageModal}>
+          <DialogPortal>
+            <DialogOverlay className="fixed inset-0 z-50 bg-black/20 backdrop-blur-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+            <DialogContent className="max-w-md bg-background/95 backdrop-blur-xl border-2">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Image className="h-5 w-5" />
+                Generate Image with DALL-E
+              </DialogTitle>
+            </DialogHeader>
+            
+            <div className="space-y-4">
+              {/* Prompt Input */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Image Prompt</label>
+                <textarea
+                  value={imagePrompt}
+                  onChange={(e) => setImagePrompt(e.target.value)}
+                  placeholder="Describe the image you want to generate..."
+                  className="w-full p-3 border rounded-lg text-sm resize-none"
+                  rows={3}
+                />
+              </div>
+
+              {/* Model Selection */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Model</label>
+                <Select value={selectedImageModel} onValueChange={(value: "dall-e-2" | "dall-e-3") => setSelectedImageModel(value)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="dall-e-2">DALL-E 2</SelectItem>
+                    <SelectItem value="dall-e-3">DALL-E 3</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Size Selection */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Size</label>
+                <Select 
+                  value={imageSize} 
+                  onValueChange={(value: "256x256" | "512x512" | "1024x1024" | "1024x1792" | "1792x1024") => setImageSize(value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {selectedImageModel === "dall-e-2" ? (
+                      <>
+                        <SelectItem value="256x256">256×256 (Square)</SelectItem>
+                        <SelectItem value="512x512">512×512 (Square)</SelectItem>
+                        <SelectItem value="1024x1024">1024×1024 (Square)</SelectItem>
+                      </>
+                    ) : (
+                      <>
+                        <SelectItem value="1024x1024">1024×1024 (Square)</SelectItem>
+                        <SelectItem value="1024x1792">1024×1792 (Portrait)</SelectItem>
+                        <SelectItem value="1792x1024">1792×1024 (Landscape)</SelectItem>
+                      </>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* DALL-E 3 Advanced Options */}
+              {selectedImageModel === "dall-e-3" && (
+                <>
+                  <div>
+                    <label className="text-sm font-medium mb-2 block">Quality</label>
+                    <Select value={imageQuality} onValueChange={(value: "standard" | "hd") => setImageQuality(value)}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="standard">Standard</SelectItem>
+                        <SelectItem value="hd">HD</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium mb-2 block">Style</label>
+                    <Select value={imageStyle} onValueChange={(value: "vivid" | "natural") => setImageStyle(value)}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="vivid">Vivid</SelectItem>
+                        <SelectItem value="natural">Natural</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              )}
+
+              {/* Cost Display */}
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Cost per image:</span>
+                <Badge variant="secondary">5 credits</Badge>
+              </div>
+
+              {/* User Credits Display */}
+              {user && (
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Your credits:</span>
+                  <Badge variant={user.credits >= 5 ? "default" : "destructive"}>
+                    {user.credits} credits
+                  </Badge>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex gap-2 pt-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setShowImageModal(false);
+                    setImagePrompt("");
+                  }}
+                  className="flex-1"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleImageGeneration}
+                  disabled={!imagePrompt.trim() || !user || user.credits < 5 || isGeneratingImage}
+                  className="flex-1"
+                >
+                  {isGeneratingImage ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2" />
+                      Generating...
+                    </>
+                  ) : (
+                    `Generate (5 credits)`
+                  )}
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+          </DialogPortal>
+        </Dialog>
       </div>
     </div>
   )
